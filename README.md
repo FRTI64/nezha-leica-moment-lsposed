@@ -1,12 +1,12 @@
 # nezha-leica-moment-lsposed
 
-**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.1.0 —— 零属性伪装**
+**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.2.0 —— 零属性伪装**
 
 > ✅ 不 resetprop、不 hook `SystemProperties`、不修改任何 `ro.*` 属性：改为**直接 hook App 内部判定方法**返回 true（仅影响被 hook 进程）。
-> 同时保留小米账号 Cookie 登录/注入、未登录兜底；CTA 不强制、不伪造硬件认证、不绕过服务端权益。
+> 同时保留小米账号 Cookie 登录/注入、未登录兜底；v2.2.0 新增 **Cookie 体检（只读 GET 探测）**、**WebView STS 助手（补 serviceToken）** 与**卡片式新 UI**。CTA 不强制、不伪造硬件认证、不绕过服务端权益。
 
 - 目标：`com.miui.mediaeditor`（相册-编辑，国际版 2.10.40.4.8-global / 国行 2.10.43.0.6）；可选 `com.android.camera`（配 Magisk CameraOnly 提供国行 MiuiCamera 6.7 APK）。
-- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.1.0.apk`（29,284 B，sha256 `000021d9…3a25`，versionCode 5）。
+- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.2.0.apk`（37,476 B，sha256 `466ac663…716b`，versionCode 6）。
 - 未真机验证；仅供个人设备本地研究与自用修改。
 
 ---
@@ -20,6 +20,9 @@
 | Cookie 注入 | `go.e.b()`(CN) / `bs.e.b()`(GLOBAL) STS Cookie 提供者 | 替换返回值 + 写回其进程内静态缓存字段 `b`；原值回传 UI 供复用 |
 | 未登录兜底 | `ga0.e.a(Context)` / `be0.e.a(Context)` | 绕过上传前 `uploadFile: failed, not login` 硬检查（用 Cookie 中 userId/cUserId 或 `demo`） |
 | CTA | 不 hook | 正常隐私弹窗由用户自己同意 |
+| Cookie 体检（v2.2.0） | 后台线程 GET 只读探测（不跟随重定向、8s 超时、8KB 截断）：`i.mi.com/status/lite/setting`、`gallery.i.mi.com`、`i.mi.com/gallery/public/resource/info` | 分色判定 2xx/登录重定向/401-403/网络错误；**不触发 legendV2/create 等可能计费的 POST**；非权益验证 |
+| STS 助手（v2.2.0） | 登录后「去 i.mi.com 完成 STS」→ 读取并合并 account.xiaomi.com/i.mi.com/gallery.i.mi.com/api.open.ai.xiaomi.com/xiaomi.com Cookie | Cookie 组成检查（彩色键位）：缺 `serviceToken` 时醒目提示（Web Cookie ≠ STS Cookie） |
+| UI（v2.2.0） | 全程序化卡片式界面、深浅色自适应、状态胶囊、分区（状态总览/账号与 Cookie/Cookie 体检/功能开关/说明与限制）、WebView 与帮助可折叠 | 无 XML 资源 |
 
 ### B) 相机「徕卡一瞬」（需 Magisk CameraOnly 提供 CN MiuiCamera 6.7.000280.0）
 | # | Hook | 签名 | 强制 |
