@@ -10,11 +10,12 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.1.0.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 5 / versionName 2.1.0，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 `v1.0.0` / `v1.1.0` / `v1.2.0` / `v2.0.0` 已被本版取代）。
-   本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（既不 resetprop，也不 hook SystemProperties）。
-   v2.1.0 在 v2.0.0 编辑器 hook 基础上新增 **相机「徕卡一瞬」拍摄** hook（需 Magisk CameraOnly 变体，见第 3 节）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.2.0.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 6 / versionName 2.2.0，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.0.0 / v2.1.0 已被本版取代）。
+   本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
+   v2.2.0 在 v2.1.0 全部 hook 基础上新增：**Cookie 体检（只读 GET）**、**WebView STS 助手**、
+   **Cookie 组成检查** 与 **卡片式深色模式 UI**（见第 7 节）。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -155,7 +156,46 @@ HyperOS 4 引入了大量 Rust 组件：
 使用旧 Cookie/旧开关状态（模块配置本身约 8 秒刷新，但进程缓存的 Cookie 无法原地失效）。
 一般无需重启手机；**首次安装模块后建议重启一次手机**。
 
-## 7. 验证是否生效
+## 7. Cookie 体检 / STS 助手 / 界面说明（v2.2.0 新增）
+
+模块首页为纯代码绘制的卡片式界面（深色/浅色自适应，无 XML 布局），分区：
+
+- **① 状态总览**：门禁解锁 Hook 是否启用、Cookie 是否已配置、是否含 serviceToken、上次体检结论。
+  顶部状态胶囊实时显示「门禁 / Cookie / 体检」状态。
+- **② 账号与 Cookie**：
+  - 「打开登录页」→ 在可折叠 WebView 中登录小米账号（passport 登录 URL 与 CN ROM 一致）；
+  - 「去 i.mi.com 完成 STS」→ 在 WebView 中打开 `https://i.mi.com/`，登录状态下会触发
+    STS（`serviceToken`）签发；
+  - 「读取登录 Cookie」→ 合并 `account.xiaomi.com` / `i.mi.com` / `gallery.i.mi.com` /
+    `api.open.ai.xiaomi.com` / `xiaomi.com` 的 Cookie（按名字去重，先到先得）；
+  - 编辑框为等宽字体、可长按选择；另有「复制 Cookie」「保存设置」「清空」；
+  - **Cookie 组成检查**：以彩色标签显示 `passToken` / `serviceToken` / `cUserId` / `userId` /
+    `deviceId` / `passInfo` / `uLocale` / `pass_ua` 等键是否存在（**只显示键名与长度，不显示令牌值**）；
+    若缺少 `serviceToken` 会显示醒目警告并给出解决建议（完成 STS 或使用系统账号捕获的 Cookie）；
+  - 「登录系统小米账号」与「填入捕获的 Cookie」保留；捕获区只显示键名与长度，不直接显示令牌值。
+- **③ Cookie 体检（只读探测）**：点「检测 Cookie 有效性」后，后台线程对以下 **GET 只读端点**
+  发起请求（8 秒超时、不跟随重定向，以便识别登录跳转）：
+  1. `https://i.mi.com/status/lite/setting`
+  2. `https://gallery.i.mi.com`
+  3. `https://i.mi.com/gallery/public/resource/info`
+
+  每个端点显示颜色化结论：绿色「未被拒绝（Cookie 被接受）」；黄色「部分不确定 / 非登录重定向 /
+  2xx 但响应含登录提示」；红色「未登录/凭据无效（重定向登录）」「凭据被拒绝（401/403）」
+  「网络不可达/超时」。结果附带 HTTP 状态码与**已脱敏**的短响应摘要。
+  聚合结论会明确说明：**体检只验证 Cookie 是否被接受，云端权益（点数/设备白名单/硬件认证 token）
+  仍由小米服务端校验，无法通过客户端验证**；探测端点可能随服务端调整。
+- **④ 功能开关**：门禁解锁（直接方法 Hook，不修改任何系统属性）、Cookie 注入；
+  CTA 开关为不可用状态（本模块有意不强制 CTA）。
+- **⑤ 使用说明与限制**：可折叠，内容与第 2~9 节一致。
+
+**安全说明（重要）：**
+
+- Cookie 属于用户自己的账号凭据，仅保存在本机模块私有目录；模块**不会上传**，也**不会把
+  passToken / serviceToken 等令牌值写入日志或体检结果**（代码中只记录端点、HTTP 码、键名/长度）。
+- Cookie 体检是 **GET 只读探测**（无 POST，不消耗云端配额），结果仅供参考。
+- 复制到剪贴板后请注意其它应用可能读取剪贴板；测试/排障完成后建议及时清理。
+
+## 8. 验证是否生效
 
 1. 强制停止后打开「相册 → 编辑」，观察「徕卡一瞬 / 二次增强」入口是否出现
    （国际版原本应隐藏）。
@@ -172,7 +212,7 @@ HyperOS 4 引入了大量 Rust 组件：
    - `captured system-account cookie (N chars) reported to module app, ok=true`
 3. 触发一次云端任务：若服务端返回 401/任务失败/排队失败，见下面限制。
 
-## 8. 已知限制（重要）
+## 9. 已知限制（重要）
 
 - **云端权益在服务端校验**：点数/配额/设备白名单（`leica_support_devices`、
   `lcc_support_devices`、`mist_support_devices`）来自小米云端 CloudConfig，
@@ -205,7 +245,7 @@ HyperOS 4 引入了大量 Rust 组件：
 - 本模块不收集、不上传任何数据；Cookie 只保存在本机模块私有目录
   （ContentProvider 仅对 `com.miui.mediaeditor` / `com.miui.gallery` / 自身开放，按 uid+包名校验）。
 
-## 9. 排错
+## 10. 排错
 
 | 现象 | 处理 |
 |---|---|
