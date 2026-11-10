@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  LeicaMoment LSPosed module - legacy Xposed API (de.robv.android.xposed.IXposedHookLoadPackage).
+  Pure programmatic UI: no XML layouts / no app resources required.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.nezha.leica.lsposed"
+    android:versionCode="2"
+    android:versionName="1.1.0">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <uses-sdk
+        android:minSdkVersion="29"
+        android:targetSdkVersion="35" />
+
+    <application
+        android:allowBackup="false"
+        android:label="徕卡一瞬 LSPosed"
+        android:supportsRtl="true">
+
+        <!-- Legacy Xposed module metadata (recognized by LSPosed manager for legacy modules). -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="小米徕卡「一瞬/二次增强」门禁绕过（SystemProperties 伪装）+ 小米账号 Cookie 注入。适用 com.miui.mediaeditor / com.miui.gallery。" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="82" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="徕卡一瞬 LSPosed">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Read-only config bridge consumed by the hooked mediaeditor/gallery processes.
+             Exported intentionally; all callers are verified by uid/package in
+             CookieConfigProvider.call(). -->
+        <provider
+            android:name=".CookieConfigProvider"
+            android:authorities="com.nezha.leica.lsposed.config"
+            android:exported="true"
+            android:grantUriPermissions="false" />
+
+    </application>
+
+</manifest>
