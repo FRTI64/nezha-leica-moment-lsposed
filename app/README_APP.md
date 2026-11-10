@@ -10,15 +10,17 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.4.1.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 11 / versionName 2.4.1，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.4.0）已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.4.2.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 12 / versionName 2.4.2，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.4.1）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
    v2.4.0 重点：**彻底移除系统账号 Cookie 路径**（不读取/不捕获/不保存系统账号 STS Cookie）；
    Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）。
    v2.4.1 新增：**真实目标 API 只读探测**（`api.open.ai.xiaomi.com/aiPhotoCloud/api/legendV2/list`，
    POST body `{}`，不创建任务/不收费）+ AI 平台桌面 Chrome UA 重试 + **复制诊断信息** +
    Cookie 合并按域名优先级去重（i.mi.com > api.open.ai.xiaomi.com > gallery.i.mi.com > account.xiaomi.com > xiaomi.com）。
+   v2.4.2 修正判定：**micloud HTTP 2xx（无登录标识）= 鉴权通过（绿色）**，业务参数不足不再降级为黄色；
+   AI 云平台行改为**仅供参考**（基址由云端配置动态下发，404/405 只表示路径/基址不匹配，不参与鉴权结论）。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -193,14 +195,19 @@ HyperOS 4 引入了大量 Rust 组件：
   请求带 `Referer: https://i.mi.com/`、`Accept-Language: zh-CN,zh;q=0.9` 和 UA（AI 平台行会额外用桌面 Chrome UA 重试）：
   - `pass_ua=web` 等网页 Cookie 优先使用 **Chrome-mobile UA**，否则先用 MiuiGallery UA；
   - 首次 HTTP 401 时用**另一种 UA 重试同一端点一次**，报告最佳结果并在结论中标注 UA；
-  - 判定规则（沿用 v2.2.2 语义）：绿色=2xx 未要求重新登录；黄色=参数不足/网络问题/非登录重定向
-    （不判定 Cookie 无效）；红色=401/403 或 2xx 响应含 `"R":401`/`serviceLogin`，或重定向到登录页；
-  - **AI 云平台行**（「AI 云平台（真实目标 API，只读 list）」）：401/403 或响应含 `"R":401`/`serviceLogin`
-    → 红色拒绝；2xx 无鉴权标识 → 绿色「AI 云平台未要求重新登录」；2xx 但缺参/业务错误 JSON 或其它 4xx
-    → 黄色「非鉴权问题」；网络错误 → 黄色。
-  - **聚合结论**：i.mi.com micloud 被拒绝但 AI 云平台为绿/黄 → 「实际二次增强可能仍可用（以实测为准）」；
-    i.mi.com 与 AI 云平台**都** 401 → 「网页 Cookie 不被小米云鉴权接受（服务端行为）；在不使用系统账号
-    Cookie 的前提下客户端无法修复」。若合并时存在跨域重复 Cookie 键，结论会提示可能与此有关。
+  - micloud 判定规则（v2.4.2）：**绿色 = HTTP 2xx 且无登录/401 标识 = 鉴权通过**（「未被要求重新登录
+    （鉴权通过，HTTP 200）」）；若响应正文是业务参数不足 JSON，仅追加「业务参数不足，不影响鉴权结论」，
+    仍保持绿色；黄色 = 网络问题/非登录重定向（不判定 Cookie 无效）；红色 = 401/403 或响应含
+    `"R":401`/`serviceLogin` 或重定向到登录页；
+  - **「参考：AI 云平台（基址由云端配置动态下发，可能 404）」行**：仅作参考，**不参与鉴权结论**。
+    该基址由云端配置（`AIConfig.url_config`）动态下发，硬编码路径可能 404；因此 404/405 → 黄色
+    「路径/基址不匹配（不代表 Cookie 无效）」；401/403 或 `"R":401`/`serviceLogin` → 红色（仅供参考）；
+    2xx → 绿色（仅参考）；其它 → 黄色。
+  - **聚合结论（只看 micloud）**：两个 micloud 端点都 2xx → 「Cookie 已被小米云鉴权接受（micloud HTTP 200）
+    → 鉴权通过；请直接实测相册编辑「二次增强」，能否出图取决于服务端权益/设备白名单/硬件认证 token」；
+    任一 micloud 401/403 → 红色结论；仅网络问题 → 无法判定（不代表 Cookie 无效）。结论中会附带
+    「AI 云平台基址由云端配置动态下发，404 不是鉴权信号」的参考说明。若合并时存在跨域重复 Cookie 键，
+    结论会提示可能与此有关。
   - 若上次由全屏登录页返回了网页会话自检结果：体检 401 且自检 200 时，结论会说明「网页 Cookie 与
     App 云 API 鉴权链路不同」；自检 401 时提示先完成网页登录/STS。
   - 「**复制诊断信息**」：只复制版本、各探测端点的 HTTP 码/UA 类型、自检状态、Cookie 键名与长度、
@@ -288,6 +295,7 @@ HyperOS 4 引入了大量 Rust 组件：
 |---|---|
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
+| 体检 micloud 返回 HTTP 200（绿色「鉴权通过」） | Cookie 已被小米云鉴权接受；请直接实测相册编辑「二次增强」。能否出图仍取决于服务端权益/设备白名单/硬件认证 token（客户端无法验证）。AI 云平台参考行若为 404 属正常（基址由云端动态下发），不影响鉴权结论。 |
 | 体检显示网页 Cookie 被拒绝（HTTP 401） | 先看**AI 云平台行**：若 i.mi.com 401 但 AI 云平台为绿/黄 → 实际二次增强可能仍可用（以实测为准）；若 AI 云平台也 401 → 网页 Cookie 不被小米云鉴权接受（服务端行为；不使用系统账号 Cookie 时客户端无法修复）。同时看全屏登录页「自检」：401 请先完成网页登录/STS；可点「复制诊断信息」查看各端点/UA/重复键详情（不含令牌值）。 |
 | 日志有 hook，但云端任务失败 | 多为服务端权益/设备白名单/CTA/硬件 token 或用户 Cookie 鉴权链路差异问题，客户端无法解决。 |
 | 相机模式栏没有「徕卡一瞬」 | 确认已刷 Magisk CameraOnly 变体（CN MiuiCamera 6.7.000280.0）；LSPosed 作用域勾选 `com.android.camera`；强制停止相机；日志查 `camera hook installed:`；若 HAL 无 legendary 能力则仅 UI 出现、实际效果可能仍缺失（见第 3 节）。 |
