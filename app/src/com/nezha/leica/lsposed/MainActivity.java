@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
     private TextView capturedView;
     private EditText cookieEdit;
     private WebView webView;
-    private CheckBox cbProps;
+    private CheckBox cbGate;
     private CheckBox cbCookie;
     private CheckBox cbCta;
 
@@ -227,10 +227,10 @@ public class MainActivity extends Activity {
 
         // ④ Toggles
         root.addView(sectionTitle("④ 开关"));
-        cbProps = new CheckBox(this);
-        cbProps.setText("启用门禁绕过（系统属性伪装：region=cn / ro.theme_customize=LCC 等）");
-        cbProps.setTextSize(14);
-        root.addView(cbProps);
+        cbGate = new CheckBox(this);
+        cbGate.setText("启用门禁绕过（直接 hook 判定方法返回 true，不修改/伪装任何系统属性）");
+        cbGate.setTextSize(14);
+        root.addView(cbGate);
 
         cbCookie = new CheckBox(this);
         cbCookie.setText("启用 Cookie 注入（用上方 Cookie 替换 App 取到的 STS Cookie；留空则按原样）");
@@ -294,12 +294,12 @@ public class MainActivity extends Activity {
         SharedPreferences p = ModuleConfig.prefs(this);
         boolean ok = p.edit()
                 .putString(ModuleConfig.KEY_COOKIE, cookie)
-                .putBoolean(ModuleConfig.KEY_ENABLE_PROPS, cbProps.isChecked())
+                .putBoolean(ModuleConfig.KEY_ENABLE_GATE_BYPASS, cbGate.isChecked())
                 .putBoolean(ModuleConfig.KEY_ENABLE_COOKIE, cbCookie.isChecked())
                 .putBoolean(ModuleConfig.KEY_FORCE_CTA, cbCta.isChecked())
                 .commit();
         String msg = "已保存" + (ok ? "成功" : "失败") + "。Cookie " + cookie.length() + " 字符；"
-                + "门禁绕过=" + (cbProps.isChecked() ? "开" : "关") + "，"
+                + "门禁绕过=" + (cbGate.isChecked() ? "开" : "关") + "，"
                 + "Cookie注入=" + (cbCookie.isChecked() ? "开" : "关") + "，"
                 + "强制CTA=" + (cbCta.isChecked() ? "开" : "关") + "。\n"
                 + "请强制停止 com.miui.mediaeditor 与 com.miui.gallery 后重新打开（无需重启手机）。";
@@ -378,8 +378,8 @@ public class MainActivity extends Activity {
     private void loadConfig() {
         SharedPreferences p = ModuleConfig.prefs(this);
         cookieEdit.setText(p.getString(ModuleConfig.KEY_COOKIE, ""));
-        cbProps.setChecked(p.getBoolean(ModuleConfig.KEY_ENABLE_PROPS,
-                ModuleConfig.DEFAULT_ENABLE_PROPS));
+        cbGate.setChecked(p.getBoolean(ModuleConfig.KEY_ENABLE_GATE_BYPASS,
+                ModuleConfig.DEFAULT_ENABLE_GATE_BYPASS));
         cbCookie.setChecked(p.getBoolean(ModuleConfig.KEY_ENABLE_COOKIE,
                 ModuleConfig.DEFAULT_ENABLE_COOKIE));
         cbCta.setChecked(p.getBoolean(ModuleConfig.KEY_FORCE_CTA,
@@ -495,8 +495,9 @@ public class MainActivity extends Activity {
         StringBuilder sb = new StringBuilder();
         sb.append("【使用步骤】\n");
         sb.append("1. 安装本 APK 后打开 LSPosed 管理器 →「模块」→ 启用「徕卡一瞬 LSPosed」。\n");
-        sb.append("2. 在模块作用域（勾选应用）中勾选：com.miui.mediaeditor（必选）、"
-                + "com.miui.gallery（可选）。保存后建议重启手机一次。\n");
+        sb.append("2. 在模块作用域（勾选应用）中勾选：com.miui.mediaeditor（云端二次增强，必选）；"
+                + "如使用相机「徕卡一瞬」，再勾选 com.android.camera；com.miui.gallery 可选。"
+                + "保存后建议重启手机一次。\n");
         sb.append("2.1 首次启用后建议清除相册能力缓存一次：设置→应用→相册→存储→"
                 + "清除缓存/清除数据（或 adb shell pm clear com.miui.gallery；会清除相册本地设置/缓存）。"
                 + "相册是 Flutter+Rust 应用，Rust 层会缓存“能力不可用”的旧结果。\n");
@@ -506,11 +507,17 @@ public class MainActivity extends Activity {
         sb.append("   c) 系统账号：点第③节「登录系统小米账号」完成系统小米账号登录"
                 + "（或已在系统设置登录），然后打开相册→编辑触发一次云端请求，"
                 + "模块会自动捕获 App 自己取到的 STS Cookie，再回本页填入并保存。\n");
-        sb.append("4. 修改 Cookie 或任意设置后：系统设置 → 应用 →「相册」/「媒体编辑器」→ 强制停止，"
-                + "再重新打开相册/编辑（不强制停止会继续使用进程内旧 Cookie）。\n\n");
+        sb.append("4. 【相机 / 徕卡一瞬 拍摄】需要 Magisk「CameraOnly」变体（v1.2.0，仅只读挂载国行 "
+                + "MiuiCamera.apk，不修改任何系统属性）配合本模块：在 LSPosed 作用域勾选 "
+                + "com.android.camera，重启相机进程后打开相机，模式栏应出现「徕卡一瞬」（模式 id 0x100）。"
+                + "本模块只 hook 相机自身的 Java 判定方法，不读取/不修改属性。\n");
+        sb.append("5. 修改 Cookie 或任意设置后：系统设置 → 应用 →「相册」/「媒体编辑器」/「相机」→ 强制停止，"
+                + "再重新打开（不强制停止会继续使用进程内旧 Cookie/旧状态）。\n\n");
         sb.append("【说明与限制】\n");
-        sb.append("· 门禁绕过只在本进程内伪装 SystemProperties 读取（region=cn、ro.theme_customize=LCC 等），"
-                + "让媒体编辑器显示「徕卡一瞬 / 二次增强」入口，不修改系统属性文件。\n");
+        sb.append("· 本模块「无属性伪装」模式：不修改、不伪装任何系统属性"
+                + "（不做属性读写，也不 hook SystemProperties）。门禁绕过改为直接 hook App 自身的 Java 判定方法返回 true："
+                + "媒体编辑器 CN 为 rt.a.g()/ah0.b.g()、GLOBAL 为 mx.a.g()/r21.e.b()；"
+                + "相机为 LegendaryEnter.support() 与 Te.c.W()（另有 h5() 兜底）。\n");
         sb.append("· Cookie 注入会把 App 从系统账号获取的 STS Cookie 替换为上方配置的 Cookie；"
                 + "如果云端返回 401 或任务失败，可清空手动 Cookie，让模块回退使用系统账号 Cookie。\n");
         sb.append("· WebView 登录得到的 Cookie 可能与云 API 期望的 STS Cookie 不完全一致，"
@@ -518,12 +525,17 @@ public class MainActivity extends Activity {
         sb.append("· 云端权益（点数/配额/设备白名单）由小米服务端校验，本模块无法授予；"
                 + "硬件认证 token 依赖系统小米账号与设备本身。\n");
         sb.append("· CTA 隐私协议是 App 正常弹出的用户同意窗口，本模块有意不强制；"
-                + "「二次增强」入口是否显示只取决于系统属性伪装，不需要绕过 CTA。\n");
+                + "「二次增强」入口是否显示只取决于上述判定方法，不需要绕过 CTA。\n");
         sb.append("· 设备未登录系统小米账号时，模块会 hook 上传前的登录探针（AccountUtil），"
                 + "用 Cookie 中的 userId/cUserId 作为账号标识，避免上传直接失败 “not login”。\n");
         sb.append("· HyperOS 4 含大量 Rust 组件（相册为 Flutter+Rust，libapp_gallery.so 等），"
-                + "Xposed 只能 hook Java 侧；相册进程已额外安装系统属性伪装作为其 Java/JNI 属性桥的安全网，"
-                + "如需彻底覆盖 Rust/native 属性读取，请配合 Magisk props 模块（resetprop）。\n");
+                + "LSPosed 无法 hook Dart/Rust 代码；但本路径的判定点在 mediaeditor 的 Java 代码"
+                + "（provider 方法），因此不受影响。相册可能缓存旧的能力结果，"
+                + "首次启用后按第 2.1 步清除相册缓存/数据一次即可。\n");
+        sb.append("· 相机限制：厂商相机 HAL 的 legendary 能力（M9 CCD / M3 MONOPAN-50 / M10R 等）"
+                + "与运行时 legend_mode SDK 不由 APK 提供，Java hook 只能让入口/UI 出现，"
+                + "若 HAL 不支持则实际徕卡效果可能缺失或回退；国行 MiuiCamera APK 必需，"
+                + "国际版相机 6.6 的等价 hook 未覆盖。云端权益仍由服务端校验。\n");
         sb.append("· 本项目为离线逆向研究用途，未在真机上测试，请自行承担风险。\n");
         sb.append("· 本模块不收集、不上传任何数据；Cookie 仅保存在本机模块私有目录。\n");
         return sb.toString();
