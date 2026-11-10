@@ -1,0 +1,11 @@
+# LSPosed modern-API module metadata (java.util.Properties format).
+# NOTE: These keys are ONLY consumed by LSPosed for modules built against the
+# modern libxposed API (io.github.libxposed:api, API version 100), which are
+# detected by the presence of META-INF/xposed/java_init.list.
+# This module is a LEGACY (de.robv.android.xposed API 82) module, so LSPosed
+# ignores this file and uses AndroidManifest meta-data (xposedminversion) +
+# assets/xposed_init instead. It is shipped so the exact doc'd format is
+# demonstrated and so the tree can be migrated to the modern API later.
+minApiVersion=100
+targetApiVersion=100
+staticScope=true
