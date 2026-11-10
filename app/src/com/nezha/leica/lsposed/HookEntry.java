@@ -3,12 +3,10 @@ package com.nezha.leica.lsposed;
 import android.content.Context;
 import android.os.Bundle;
 
-import java.util.HashMap;
-import java.util.Map;
-
 import android.app.AndroidAppHelper;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
@@ -16,57 +14,59 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 /**
  * Legacy Xposed entry ({@code assets/xposed_init} -&gt; com.nezha.leica.lsposed.HookEntry).
  *
- * <p>Hooks installed inside {@code com.miui.mediaeditor}:</p>
+ * <p>v2.0.0 "no-props" mode: the module does NOT modify or spoof any system
+ * property (neither Magisk resetprop nor android.os.SystemProperties hooks).
+ * Instead, in the {@code com.miui.mediaeditor} process it directly hooks the
+ * app's availability predicate methods and makes them return true:</p>
+ * <ul>
+ *   <li>CN 2.10.43.0.6: {@code rt.a.g()Z}, {@code ah0.b.g()Z}</li>
+ *   <li>GLOBAL 2.10.40.4.8-global: {@code mx.a.g()Z}, {@code r21.e.b()Z}</li>
+ * </ul>
+ * <p>These are the chokepoints used by MediaEditorProviderForGallery for
+ * {@code method_is_legend_available}; the xm/传奇 variant predicates
+ * ({@code bx.t.a()}, {@code ft.s.a()}) are intentionally NOT hooked so that
+ * variant naturally keeps returning false.</p>
+ *
+ * <p>Also kept from v1.x:</p>
  * <ol>
- *   <li>SystemProperties.get/getBoolean/getInt spoofing (gating bypass):
- *       ro.miui.build.region=cn, ro.theme_customize=LCC, ro.theme_leica=true,
- *       ro.boot.product.theme_customize=P1_Leica, ro.special_edition=true.
- *       Evidence: work/leica/docs/ANALYSIS.md section 3.1/3.2.</li>
- *   <li>Xiaomi STS cookie provider injection: obfuscated zero-arg static
- *       {@code String b()} in CN 2.10.43.0.6 ({@code go.e}) and GLOBAL
- *       2.10.40.4.8-global ({@code bs.e}). The original result (when non-empty)
- *       is reported back to the module app as "captured cookie".</li>
- *   <li>AccountUtil login probe ("uploadFile: failed, not login" guard):
- *       obfuscated {@code ga0.e.a(Context)} (CN) / {@code be0.e.a(Context)}
- *       (GLOBAL); when no system Xiaomi account exists but the user supplied
- *       a cookie, a non-empty account id derived from the cookie
- *       (userId/cUserId, fallback "demo") is returned so the upload proceeds.
- *       Evidence: work/leica/docs/lsposed_hook_targets.md section 3.</li>
- *   <li>CTA force - intentionally NOT installed: the CTA is a normal
- *       user-consented privacy dialog and the legend entry visibility is
- *       props-only (no CTA input). Only a log line is emitted if requested.</li>
+ *   <li>Xiaomi STS cookie injection: {@code go.e.b()} (CN) / {@code bs.e.b()}
+ *       (GLOBAL), including the static cookie-cache field "b" fix.</li>
+ *   <li>AccountUtil login probe {@code ga0.e.a(Context)} /
+ *       {@code be0.e.a(Context)} for devices without a system Xiaomi account.</li>
+ *   <li>CTA is never forced - it is a normal user-consented privacy dialog and
+ *       the entry visibility is controlled by the predicates above.</li>
  * </ol>
  *
- * <p>{@code com.miui.gallery} (HyperOS 4) is a Flutter + Rust app with no Java
- * code of its own (Dart AOT {@code libapp.so} + Rust {@code libapp_gallery.so}
- * via flutter_rust_bridge). Dart/Rust cannot be hooked from LSPosed, so for the
- * gallery process the module installs only the SystemProperties spoof hooks as
- * a safety net for the Java/JNI system-property bridge used by its Rust
- * capability probes. Cookie/account hooks stay mediaeditor-only.</p>
+ * <p>{@code com.miui.gallery} is Flutter + Rust (Dart AOT + Rust via
+ * flutter_rust_bridge): Dart/Rust code cannot be hooked from LSPosed, and in
+ * no-props mode the gallery process installs NO hooks. This is fine for the
+ * legend path because the capability probe runs through the mediaeditor
+ * provider (Java), where the predicate hooks live. The gallery capability cache
+ * may need to be cleared once after enabling the module.</p>
+ *
+ * <p>v2.1.0 adds the camera (capture) part for the CN MiuiCamera APK mounted by
+ * the Magisk "CameraOnly" variant ({@code com.android.camera} 6.7.000280.0).
+ * Still zero property spoofing: two Java gates are forced to true -
+ * {@code LegendaryEnter.support()Z} (mode 0x100 徕卡一瞬 entry visibility) and
+ * static {@code Te.c.W()Z} (isLeicaCustomize: Leica UI/branding, 15+ callers),
+ * plus a defensive fallback {@code h5()Z} on the obfuscated device-config class.
+ * Vendor camera HAL legendary capabilities and the runtime {@code legend_mode}
+ * SDK cannot be added by Java hooks (documented limitation).</p>
  *
  * <p>Every hook installation and every hook body is wrapped in try/catch so a
  * version mismatch can never crash the target app.</p>
- */
+  */
 public class HookEntry implements IXposedHookLoadPackage {
 
     private static final String TAG = "LeicaMomentLSP: ";
 
     private static final String PKG_EDITOR = "com.miui.mediaeditor";
     private static final String PKG_GALLERY = "com.miui.gallery";
+    /** CN MiuiCamera APK mounted by the Magisk "CameraOnly" variant (no props). */
+    private static final String PKG_CAMERA = "com.android.camera";
 
     /** How long a fetched config Bundle is considered fresh (toggles apply without restart). */
     private static final long CONFIG_TTL_MS = 8000L;
-
-    /** SystemProperties keys spoofed inside the mediaeditor process. */
-    private static final Map<String, String> SPOOF_PROPS = new HashMap<String, String>();
-
-    static {
-        SPOOF_PROPS.put("ro.miui.build.region", "cn");
-        SPOOF_PROPS.put("ro.theme_customize", "LCC");
-        SPOOF_PROPS.put("ro.theme_leica", "true");
-        SPOOF_PROPS.put("ro.boot.product.theme_customize", "P1_Leica");
-        SPOOF_PROPS.put("ro.special_edition", "true");
-    }
 
     /**
      * Obfuscated cookie providers: {class, method}. Both return the Xiaomi STS
@@ -88,6 +88,46 @@ public class HookEntry implements IXposedHookLoadPackage {
             {"be0.e", "a"}  // com.miui.mediaeditor 2.10.40.4.8-global (GLOBAL)
     };
 
+
+    /**
+     * Availability predicates forced to true: {class, method}, both static.
+     * Selected by version at runtime; missing targets are logged and skipped.
+     * CN 2.10.43.0.6: rt.a.g()Z + ah0.b.g()Z.
+     * GLOBAL 2.10.40.4.8-global: mx.a.g()Z + r21.e.b()Z.
+     * bx.t.a()/ft.s.a() (xm/传奇 variant) are deliberately NOT hooked.
+     */
+    private static final String[][] GATE_PREDICATE_TARGETS = new String[][]{
+            {"rt.a", "g"},   // CN mediaeditor 2.10.43.0.6
+            {"ah0.b", "g"},  // CN mediaeditor 2.10.43.0.6
+            {"mx.a", "g"},   // GLOBAL mediaeditor 2.10.40.4.8-global
+            {"r21.e", "b"}   // GLOBAL mediaeditor 2.10.40.4.8-global (static)
+    };
+
+
+    /**
+     * CN MiuiCamera 6.7.000280.0 camera gate hooks: {class, method}. Forced to
+     * true only (no property reads/writes):
+     * H1 LegendaryEnter.support()Z - makes mode 0x100 徕卡一瞬 appear in the
+     *    mode list (u3/a.a filter calls entry.support() on every entry);
+     * H2 Te.c.W()Z (static) - isLeicaCustomize backing Leica UI/branding and
+     *    15+ call sites; bypasses the cached ro.theme_customize=="LCC" check.
+     */
+    private static final String[][] CAMERA_GATE_TARGETS = new String[][]{
+            {"com.android.camera.features.mode.legendary.LegendaryEnter", "support"},
+            {"Te.c", "W"}
+    };
+
+    /**
+     * H3 defensive fallback: obfuscated device-config implementation that backs
+     * LegendaryEnter.support() via Te/c.e and simply calls Te/c.W(). The class
+     * name is a 19-char R8 name (encoded as unicode escapes for encoding safety);
+     * resolution failure is expected on other camera versions and is harmless.
+     */
+    private static final String CAMERA_FALLBACK_CLASS =
+            "\ubf93\ubf9f\ubf9d\ubfde\ubf9d\ubf99\ubfde\ubf94\ubf95\ubf86"
+            + "\ubf99\ubf93\ubf95\ubfde\ubfbe\ubf95\ubf8a\ubf98\ubf91";
+    private static final String CAMERA_FALLBACK_METHOD = "h5";
+
     private static volatile Bundle sConfig;
     private static volatile long sConfigTs;
     private static volatile Context sAppContext;
@@ -103,22 +143,28 @@ public class HookEntry implements IXposedHookLoadPackage {
             return;
         }
         String pkg = lpparam.packageName;
-        if (!PKG_EDITOR.equals(pkg) && !PKG_GALLERY.equals(pkg)) {
+        if (!PKG_EDITOR.equals(pkg) && !PKG_GALLERY.equals(pkg) && !PKG_CAMERA.equals(pkg)) {
             return;
         }
         try {
             log("handleLoadPackage: pkg=" + pkg + " process=" + lpparam.processName);
-            if (!PKG_EDITOR.equals(pkg)) {
-                // com.miui.gallery is Flutter + Rust (HyperOS 4): Dart AOT libapp.so +
-                // Rust libapp_gallery.so (flutter_rust_bridge). Dart/Rust cannot be hooked
-                // from LSPosed, but gallery's Java/JNI SystemPropertyMethodChannel bridge
-                // still reads android.os.SystemProperties, and its Rust capability probe
-                // calls the mediaeditor provider. Install the props spoof as a safety net.
-                hookSystemProperties(lpparam);
-                log("gallery scope: SystemProperties spoof hooks installed (Rust bridge safety net)");
+            if (PKG_CAMERA.equals(pkg)) {
+                // CN MiuiCamera mounted by the Magisk CameraOnly variant: force only the
+                // app's own Java gates; no property reads or writes anywhere.
+                hookCameraGates(lpparam);
+                log("camera: all hook installers finished for " + pkg);
                 return;
             }
-            hookSystemProperties(lpparam);
+            if (!PKG_EDITOR.equals(pkg)) {
+                // com.miui.gallery is Flutter + Rust: Dart AOT libapp.so + Rust
+                // libapp_gallery.so (flutter_rust_bridge). Dart/Rust code cannot be
+                // hooked from LSPosed, and no-props mode installs nothing here by
+                // design; the capability probe goes through the mediaeditor provider
+                // (Java), which is where the predicate hooks live.
+                log("gallery: no hooks in no-props mode (Flutter/Rust; capability probe runs in mediaeditor)");
+                return;
+            }
+            hookGatePredicates(lpparam);
             hookCookieProviders(lpparam);
             hookAccountProbe(lpparam);
             log("all hook installers finished for " + pkg);
@@ -139,124 +185,106 @@ public class HookEntry implements IXposedHookLoadPackage {
     }
 
     // ---------------------------------------------------------------------
-    // (1) SystemProperties gating bypass
+    // (1) Availability predicate hooks (no-props mode)
     // ---------------------------------------------------------------------
 
-    private static void hookSystemProperties(XC_LoadPackage.LoadPackageParam lpparam) {
-        ClassLoader cl = lpparam.classLoader;
-        try {
-            XposedHelpers.findAndHookMethod("android.os.SystemProperties", cl,
-                    "get", String.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            try {
-                                if (!propsEnabled()) {
-                                    return;
+    /**
+     * Forces the app's legend availability predicates to return true.
+     *
+     * <p>This replaces the old property-spoofing layer: no system property is
+     * touched. The predicates are the chokepoints behind
+     * MediaEditorProviderForGallery {@code method_is_legend_available} -
+     * CN {@code rt.a.g()Z} + {@code ah0.b.g()Z}; GLOBAL {@code mx.a.g()Z} +
+     * static {@code r21.e.b()Z}.</p>
+     */
+    private static void hookGatePredicates(XC_LoadPackage.LoadPackageParam lpparam) {
+        int installed = 0;
+        for (int i = 0; i < GATE_PREDICATE_TARGETS.length; i++) {
+            final String className = GATE_PREDICATE_TARGETS[i][0];
+            final String methodName = GATE_PREDICATE_TARGETS[i][1];
+            try {
+                XposedHelpers.findAndHookMethod(className, lpparam.classLoader, methodName,
+                        new XC_MethodReplacement() {
+                            @Override
+                            protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
+                                if (!gateBypassEnabled()) {
+                                    // Toggle off: behave exactly like the original predicate.
+                                    return XposedBridge.invokeOriginalMethod(
+                                            param.method, param.thisObject, param.args);
                                 }
-                                Object key = param.args.length > 0 ? param.args[0] : null;
-                                if (!(key instanceof String)) {
-                                    return;
-                                }
-                                String spoof = SPOOF_PROPS.get(key);
-                                if (spoof != null) {
-                                    param.setResult(spoof);
-                                }
-                            } catch (Throwable ignored) {
+                                return Boolean.TRUE;
                             }
-                        }
-                    });
-            log("hooked SystemProperties.get(String)");
-        } catch (Throwable t) {
-            log("SystemProperties.get(String) hook failed: " + t);
+                        });
+                installed++;
+                log("predicate hook installed: " + className + "." + methodName + "()Z -> true");
+            } catch (Throwable t) {
+                log("predicate target not present (normal on other app versions): "
+                        + className + "." + methodName + " -> " + t);
+            }
         }
-
-        try {
-            XposedHelpers.findAndHookMethod("android.os.SystemProperties", cl,
-                    "get", String.class, String.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            try {
-                                if (!propsEnabled()) {
-                                    return;
-                                }
-                                Object key = param.args.length > 0 ? param.args[0] : null;
-                                if (!(key instanceof String)) {
-                                    return;
-                                }
-                                String spoof = SPOOF_PROPS.get(key);
-                                if (spoof != null) {
-                                    param.setResult(spoof);
-                                }
-                            } catch (Throwable ignored) {
-                            }
-                        }
-                    });
-            log("hooked SystemProperties.get(String, String)");
-        } catch (Throwable t) {
-            log("SystemProperties.get(String, String) hook failed: " + t);
-        }
-
-        try {
-            XposedHelpers.findAndHookMethod("android.os.SystemProperties", cl,
-                    "getBoolean", String.class, boolean.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            try {
-                                if (!propsEnabled()) {
-                                    return;
-                                }
-                                Object key = param.args.length > 0 ? param.args[0] : null;
-                                if (!(key instanceof String)) {
-                                    return;
-                                }
-                                String spoof = SPOOF_PROPS.get(key);
-                                if (spoof != null) {
-                                    param.setResult(Boolean.valueOf(
-                                            "true".equalsIgnoreCase(spoof)
-                                                    || "1".equals(spoof)));
-                                }
-                            } catch (Throwable ignored) {
-                            }
-                        }
-                    });
-            log("hooked SystemProperties.getBoolean(String, boolean)");
-        } catch (Throwable t) {
-            log("SystemProperties.getBoolean hook failed: " + t);
-        }
-
-        try {
-            XposedHelpers.findAndHookMethod("android.os.SystemProperties", cl,
-                    "getInt", String.class, int.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            try {
-                                if (!propsEnabled()) {
-                                    return;
-                                }
-                                Object key = param.args.length > 0 ? param.args[0] : null;
-                                if (!(key instanceof String)) {
-                                    return;
-                                }
-                                String spoof = SPOOF_PROPS.get(key);
-                                if (spoof != null) {
-                                    param.setResult(Integer.valueOf(Integer.parseInt(spoof)));
-                                }
-                            } catch (Throwable ignored) {
-                            }
-                        }
-                    });
-            log("hooked SystemProperties.getInt(String, int)");
-        } catch (Throwable t) {
-            log("SystemProperties.getInt hook failed: " + t);
+        if (installed == 0) {
+            log("WARN: no availability predicate hook installed on this mediaeditor version; "
+                    + "gate bypass inactive");
         }
     }
 
-    private static boolean propsEnabled() {
+    private static boolean gateBypassEnabled() {
         try {
-            return config().getBoolean("enable_props", ModuleConfig.DEFAULT_ENABLE_PROPS);
+            return config().getBoolean("enable_gate_bypass",
+                    ModuleConfig.DEFAULT_ENABLE_GATE_BYPASS);
         } catch (Throwable t) {
             return true;
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // (1b) Camera (capture) gate hooks - CN MiuiCamera via Magisk CameraOnly
+    // ---------------------------------------------------------------------
+
+    private static void hookCameraGates(XC_LoadPackage.LoadPackageParam lpparam) {
+        int installed = 0;
+        for (int i = 0; i < CAMERA_GATE_TARGETS.length; i++) {
+            final String className = CAMERA_GATE_TARGETS[i][0];
+            final String methodName = CAMERA_GATE_TARGETS[i][1];
+            try {
+                XposedHelpers.findAndHookMethod(className, lpparam.classLoader, methodName,
+                        forceTrueReplacement());
+                installed++;
+                log("camera hook installed: " + className + "." + methodName + "()Z -> true");
+            } catch (Throwable t) {
+                log("camera hook target not present (normal on other camera versions): "
+                        + className + "." + methodName + " -> " + t);
+            }
+        }
+        // H3 fallback: obfuscated device-config implementation (h5 -> Te/c.W()).
+        try {
+            XposedHelpers.findAndHookMethod(CAMERA_FALLBACK_CLASS, lpparam.classLoader,
+                    CAMERA_FALLBACK_METHOD, forceTrueReplacement());
+            installed++;
+            log("camera hook installed: " + CAMERA_FALLBACK_CLASS + "."
+                    + CAMERA_FALLBACK_METHOD + "()Z -> true (fallback)");
+        } catch (Throwable t) {
+            log("camera fallback hook not available (normal; primary gates cover it): "
+                    + t.getClass().getSimpleName());
+        }
+        if (installed == 0) {
+            log("WARN: no camera gate hook installed on this camera version; "
+                    + "Leica mode/UI may stay hidden");
+        }
+    }
+
+    /** XC_MethodReplacement returning true when the gate toggle is on, original otherwise. */
+    private static XC_MethodReplacement forceTrueReplacement() {
+        return new XC_MethodReplacement() {
+            @Override
+            protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
+                if (!gateBypassEnabled()) {
+                    return XposedBridge.invokeOriginalMethod(
+                            param.method, param.thisObject, param.args);
+                }
+                return Boolean.TRUE;
+            }
+        };
     }
 
     // ---------------------------------------------------------------------
@@ -494,7 +522,7 @@ public class HookEntry implements IXposedHookLoadPackage {
         Bundle fallback = new Bundle();
         fallback.putString("cookie", "");
         fallback.putString("captured_cookie", "");
-        fallback.putBoolean("enable_props", ModuleConfig.DEFAULT_ENABLE_PROPS);
+        fallback.putBoolean("enable_gate_bypass", ModuleConfig.DEFAULT_ENABLE_GATE_BYPASS);
         fallback.putBoolean("enable_cookie", ModuleConfig.DEFAULT_ENABLE_COOKIE);
         fallback.putBoolean("force_cta", ModuleConfig.DEFAULT_FORCE_CTA);
         fallback.putString("module_version", ModuleConfig.MODULE_VERSION);
