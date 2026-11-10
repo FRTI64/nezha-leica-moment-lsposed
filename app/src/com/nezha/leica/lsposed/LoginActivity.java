@@ -12,6 +12,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -26,8 +27,11 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONObject;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * v2.3.0 full-screen Xiaomi login / STS helper.
@@ -50,6 +54,14 @@ import java.util.Map;
 public class LoginActivity extends Activity {
 
     public static final String EXTRA_COOKIE = "cookie";
+    /** HTTP status of the in-WebView session self-test (200/401/...; -1 network; MIN_VALUE unknown). */
+    public static final String EXTRA_SELFTEST_STATUS = "selftest_status";
+    /** Sanitized snippet of the self-test response (never contains token values). */
+    public static final String EXTRA_SELFTEST_SNIPPET = "selftest_snippet";
+
+    private static final String SELFTEST_URL =
+            "https://i.mi.com/status/lite/setting?type=1";
+    private static final String JS_BRIDGE_NAME = "LeicaSelfTest";
 
     private static final String TAG = "LeicaMomentLSP";
     private static final String START_URL = "https://i.mi.com/";
@@ -78,7 +90,14 @@ public class LoginActivity extends Activity {
     private ProgressBar progress;
     private TextView statusView;
     private TextView errorView;
+    private TextView selfTestView;
     private boolean stsRetried;
+
+    /** In-WebView session self-test state (distinguishes 401 web-session vs export issue). */
+    private String pendingSelfTestNonce;
+    private boolean selfTestPendingFinish;
+    private int selfTestStatus = Integer.MIN_VALUE;
+    private String selfTestSnippet = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -136,6 +155,10 @@ public class LoginActivity extends Activity {
     protected void onDestroy() {
         try {
             if (webView != null) {
+                try {
+                    webView.removeJavascriptInterface(JS_BRIDGE_NAME);
+                } catch (Throwable ignored) {
+                }
                 webView.stopLoading();
                 webView.loadUrl("about:blank");
                 webView.destroy();
@@ -212,13 +235,22 @@ public class LoginActivity extends Activity {
         });
         bar.addView(refresh);
 
+        Button selfTest = barButton("\u81ea\u68c0", "\u7f51\u9875\u4f1a\u8bdd\u81ea\u68c0");
+        selfTest.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                runWebSessionSelfTest(false);
+            }
+        });
+        bar.addView(selfTest);
+
         Button done = barButton("\u5b8c\u6210", "\u5b8c\u6210\u5e76\u8bfb\u53d6 Cookie");
         done.setBackground(roundBg(COLOR_ACCENT, dp(10), COLOR_ACCENT));
         done.setTextColor(Color.WHITE);
         done.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                finishWithCookie();
+                onDoneClick();
             }
         });
         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
@@ -258,6 +290,11 @@ public class LoginActivity extends Activity {
             CookieManager cm = CookieManager.getInstance();
             cm.setAcceptCookie(true);
             cm.setAcceptThirdPartyCookies(wv, true);
+            try {
+                wv.addJavascriptInterface(new SelfTestBridge(), JS_BRIDGE_NAME);
+            } catch (Throwable t) {
+                Log.w(TAG, "addJavascriptInterface failed: " + t);
+            }
             wv.setBackgroundColor(Color.WHITE);
             wv.setWebViewClient(new WebViewClient() {
                 @Override
@@ -294,8 +331,7 @@ public class LoginActivity extends Activity {
                         return;
                     }
                     showError("\u9875\u9762\u8fd4\u56de HTTP " + code + "\uff1a" + url
-                            + "\n\u53ef\u70b9\u4e0b\u65b9\u91cd\u8bd5\uff0c\u6216\u8fd4\u56de\u4f7f\u7528\u300c\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u300d"
-                            + "\u7684 STS Cookie\u3002");
+                            + "\n\u53ef\u70b9\u4e0b\u65b9\u91cd\u8bd5\uff0c\u6216\u8fd4\u56de\u6a21\u5757\u624b\u52a8\u7c98\u8d34\u7528\u6237 Cookie\u3002");
                 }
 
                 @Override
@@ -319,7 +355,7 @@ public class LoginActivity extends Activity {
                     String desc = error == null || error.getDescription() == null
                             ? "" : String.valueOf(error.getDescription());
                     showError("\u9875\u9762\u52a0\u8f7d\u5931\u8d25\uff08" + code + " " + desc + "\uff09\uff1a" + url
-                            + "\n\u8bf7\u68c0\u67e5\u7f51\u7edc\uff1b\u82e5\u4ecd\u5931\u8d25\uff0c\u8bf7\u6539\u7528\u300c\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u300d\u7684 Cookie\u3002");
+                            + "\n\u8bf7\u68c0\u67e5\u7f51\u7edc\uff1b\u82e5\u4ecd\u5931\u8d25\uff0c\u53ef\u624b\u52a8\u7c98\u8d34\u7528\u6237 Cookie\u3002");
                 }
             });
             wv.setWebChromeClient(new WebChromeClient() {
@@ -358,6 +394,16 @@ public class LoginActivity extends Activity {
         content.addView(errorView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
+
+        selfTestView = new TextView(this);
+        selfTestView.setTextSize(11);
+        selfTestView.setTextColor(0xFFFFB300);
+        selfTestView.setPadding(dp(10), dp(6), dp(10), dp(2));
+        selfTestView.setBackgroundColor(COLOR_BAR);
+        selfTestView.setTextIsSelectable(true);
+        selfTestView.setVisibility(View.GONE);
+        root.addView(selfTestView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         statusView = new TextView(this);
         statusView.setTextSize(11);
@@ -413,6 +459,18 @@ public class LoginActivity extends Activity {
     // Result
     // ------------------------------------------------------------------
 
+    /** "完成": run the in-WebView session self-test once, then export the cookie. */
+    private void onDoneClick() {
+        if (selfTestStatus == Integer.MIN_VALUE) {
+            runWebSessionSelfTest(true);
+            if (statusView != null) {
+                statusView.setText("\u6b63\u5728\u81ea\u68c0\u7f51\u9875\u4f1a\u8bdd\u2026\u5b8c\u6210\u540e\u81ea\u52a8\u8fd4\u56de Cookie\u3002");
+            }
+            return;
+        }
+        finishWithCookie();
+    }
+
     private void finishWithCookie() {
         try {
             CookieManager.getInstance().flush();
@@ -420,15 +478,168 @@ public class LoginActivity extends Activity {
         }
         String cookie = mergeCookies();
         if (cookie.isEmpty()) {
-            showError("\u672a\u8bfb\u53d6\u5230 Cookie\u3002\u8bf7\u786e\u8ba4\u5df2\u5728\u9875\u9762\u4e2d\u5b8c\u6210\u5c0f\u7c73\u8d26\u53f7\u767b\u5f55"
-                    + "\uff08\u53ef\u5148\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5\uff09\uff1b\u4e5f\u53ef\u8fd4\u56de\u6a21\u5757\u4f7f\u7528\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u7684 Cookie\u3002");
+            showError("\u672a\u8bfb\u53d6\u5230 Cookie\u3002\u8bf7\u786e\u8ba4\u5df2\u5728\u9875\u9762\u4e2d\u5b8c\u6210\u5c0f\u7c73\u8d26\u53f7\u767b\u5f55\uff08\u53ef\u5148\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5\uff09\u3002");
             return;
         }
         Intent data = new Intent();
         data.putExtra(EXTRA_COOKIE, cookie);
+        data.putExtra(EXTRA_SELFTEST_STATUS, selfTestStatus);
+        data.putExtra(EXTRA_SELFTEST_SNIPPET, selfTestSnippet);
         setResult(RESULT_OK, data);
-        Log.i(TAG, "LoginActivity returned cookie length=" + cookie.length()); // never log values
+        Log.i(TAG, "LoginActivity returned cookie length=" + cookie.length()
+                + ", selftest=" + selfTestStatus); // never log token values
         finish();
+    }
+
+    // ------------------------------------------------------------------
+    // In-WebView session self-test (evaluateJavascript fetch + JS bridge)
+    // ------------------------------------------------------------------
+
+    /** Public bridge class; only reachable from pages we load (nonce validated). */
+    public final class SelfTestBridge {
+        @JavascriptInterface
+        public void post(String payload) {
+            final String data = payload;
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    handleSelfTestPayload(data);
+                }
+            });
+        }
+    }
+
+    private void runWebSessionSelfTest(boolean autoFinish) {
+        if (webView == null) {
+            if (selfTestView != null) {
+                selfTestView.setVisibility(View.VISIBLE);
+                selfTestView.setText("\u81ea\u68c0\u4e0d\u53ef\u7528\uff1a\u7cfb\u7edf WebView \u672a\u521d\u59cb\u5316\u3002");
+            }
+            if (autoFinish) {
+                finishWithCookie();
+            }
+            return;
+        }
+        String url = null;
+        try {
+            url = webView.getUrl();
+        } catch (Throwable ignored) {
+        }
+        if (url == null || !(url.contains("mi.com") || url.contains("xiaomi.com"))) {
+            if (selfTestView != null) {
+                selfTestView.setVisibility(View.VISIBLE);
+                selfTestView.setText("\u8bf7\u5148\u6253\u5f00 i.mi.com \u9875\u9762\u518d\u81ea\u68c0\uff08\u5f53\u524d\u9875\u9762\u4e0d\u5728\u5c0f\u7c73\u57df\u540d\uff09\u3002");
+            }
+            if (autoFinish) {
+                finishWithCookie();
+            }
+            return;
+        }
+        pendingSelfTestNonce = UUID.randomUUID().toString().replace("-", "");
+        selfTestPendingFinish = autoFinish;
+        selfTestStatus = Integer.MIN_VALUE;
+        selfTestSnippet = "";
+        if (selfTestView != null) {
+            selfTestView.setVisibility(View.VISIBLE);
+            selfTestView.setText("\u7f51\u9875\u4f1a\u8bdd\u81ea\u68c0\uff1a\u81ea\u68c0\u4e2d\u2026");
+        }
+        String js = "(function(){var n='" + pendingSelfTestNonce + "';"
+                + "fetch('" + SELFTEST_URL + "',{method:'GET',credentials:'include',"
+                + "headers:{'Accept':'application/json'}})"
+                + ".then(function(r){return r.text().then(function(t){"
+                + "try{window." + JS_BRIDGE_NAME + ".post(JSON.stringify({nonce:n,"
+                + "status:r.status,body:String(t).substring(0,400)}));}catch(e){"
+                + "window." + JS_BRIDGE_NAME + ".post(JSON.stringify({nonce:n,status:r.status,body:''}));}});})"
+                + ".catch(function(e){try{window." + JS_BRIDGE_NAME + ".post(JSON.stringify({nonce:n,"
+                + "status:-1,body:String(e).substring(0,200)}));}catch(x){}});"
+                + "return 'started';})()";
+        try {
+            webView.evaluateJavascript(js, null);
+        } catch (Throwable t) {
+            Log.w(TAG, "evaluateJavascript self-test failed: " + t);
+            if (selfTestView != null) {
+                selfTestView.setText("\u81ea\u68c0\u8bf7\u6c42\u53d1\u9001\u5931\u8d25\uff1a" + t);
+            }
+            if (selfTestPendingFinish) {
+                selfTestPendingFinish = false;
+                finishWithCookie();
+            }
+        }
+    }
+
+    private void handleSelfTestPayload(String payload) {
+        if (payload == null || payload.isEmpty()) {
+            return;
+        }
+        try {
+            JSONObject obj = new JSONObject(payload);
+            String nonce = obj.optString("nonce", "");
+            if (pendingSelfTestNonce == null || !pendingSelfTestNonce.equals(nonce)) {
+                Log.w(TAG, "self-test payload with unexpected nonce ignored");
+                return;
+            }
+            pendingSelfTestNonce = null;
+            int status = obj.optInt("status", -1);
+            String body = obj.optString("body", "");
+            selfTestStatus = status;
+            selfTestSnippet = sanitizeSnippet(body);
+            if (selfTestView != null) {
+                String label;
+                if (status >= 200 && status < 300) {
+                    label = "\u81ea\u68c0\uff1aHTTP " + status
+                            + "\uff08\u7f51\u9875\u4f1a\u8bdd\u6709\u6548\uff09";
+                } else if (status == 401 || status == 403) {
+                    label = "\u81ea\u68c0\uff1aHTTP " + status
+                            + "\uff08\u7f51\u9875\u4f1a\u8bdd\u672a\u901a\u8fc7\u9274\u6743\uff1a\u672a\u767b\u5f55\u6216\u9700\u8981 STS\uff09";
+                } else if (status < 0) {
+                    label = "\u81ea\u68c0\uff1a\u8bf7\u6c42\u5931\u8d25\uff08\u7f51\u7edc/\u540c\u6e90\u9650\u5236\uff09\uff0c\u65e0\u6cd5\u5224\u65ad";
+                } else {
+                    label = "\u81ea\u68c0\uff1aHTTP " + status;
+                }
+                selfTestView.setText(label + (selfTestSnippet.isEmpty() ? "" : "\n" + selfTestSnippet));
+                selfTestView.setVisibility(View.VISIBLE);
+            }
+            if (selfTestPendingFinish) {
+                selfTestPendingFinish = false;
+                if (status >= 200 && status < 300) {
+                    finishWithCookie();
+                } else if (status == 401 || status == 403) {
+                    showError("\u7f51\u9875\u4f1a\u8bdd\u672a\u901a\u8fc7\u9274\u6743\uff08HTTP " + status
+                            + "\uff09\uff1a\u8bf7\u5148\u5728\u7f51\u9875\u4e2d\u5b8c\u6210\u767b\u5f55/STS\u3002\n"
+                            + "\u82e5\u7f51\u9875\u5185\u5df2\u80fd\u6b63\u5e38\u8bbf\u95ee\u5c0f\u7c73\u4e91\uff0c"
+                            + "\u8bf4\u660e\u8be5\u7f51\u9875 Cookie \u53ef\u80fd\u4e0d\u88ab App \u4e91 API \u63a5\u53d7\u3002\n"
+                            + "\u518d\u6b21\u70b9\u300c\u5b8c\u6210\u300d\u4ecd\u4f1a\u8fd4\u56de\u5f53\u524d Cookie\u3002");
+                    if (statusView != null) {
+                        statusView.setText("\u81ea\u68c0 HTTP " + status
+                                + "\uff1a\u9875\u9762\u4f1a\u8bdd\u53ef\u80fd\u672a\u767b\u5f55\u6216\u9700\u8981 STS\u3002");
+                    }
+                } else {
+                    finishWithCookie();
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "self-test payload parse failed: " + t);
+        }
+    }
+
+    private String sanitizeSnippet(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '\n' || c == '\r' || c == '\t') {
+                sb.append(' ');
+            } else if (c >= 32 && c != 127) {
+                sb.append(c);
+            }
+        }
+        String out = sb.toString().replaceAll("\\s+", " ").trim();
+        if (out.length() > 160) {
+            out = out.substring(0, 160) + "\u2026";
+        }
+        return out;
     }
 
     private String mergeCookies() {
