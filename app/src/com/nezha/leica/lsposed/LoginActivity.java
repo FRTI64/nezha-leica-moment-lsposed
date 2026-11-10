@@ -58,6 +58,10 @@ public class LoginActivity extends Activity {
     public static final String EXTRA_SELFTEST_STATUS = "selftest_status";
     /** Sanitized snippet of the self-test response (never contains token values). */
     public static final String EXTRA_SELFTEST_SNIPPET = "selftest_snippet";
+    /** JSON {cookieKey: sourceDomain} of the merged cookie (key names only, no values). */
+    public static final String EXTRA_COOKIE_SOURCES = "cookie_sources";
+    /** Comma-separated cookie names that appeared on >1 domain (dedupe info only). */
+    public static final String EXTRA_COOKIE_DUP_KEYS = "cookie_dup_keys";
 
     private static final String SELFTEST_URL =
             "https://i.mi.com/status/lite/setting?type=1";
@@ -71,13 +75,23 @@ public class LoginActivity extends Activity {
             + "Build/AP3A.240905.015) AppleWebKit/537.36 (KHTML, like Gecko) "
             + "Chrome/120.0.0.0 Mobile Safari/537.36";
 
+    /**
+     * Cookie capture order = merge priority (first domain wins for duplicate names):
+     * i.mi.com > api.open.ai.xiaomi.com > gallery.i.mi.com > account.xiaomi.com > xiaomi.com.
+     * Rationale: the cloud APIs (i.mi.com / api.open.ai.xiaomi.com) are the real targets, so
+     * their values must win over account.xiaomi.com if both domains set the same name.
+     */
     private static final String[] COOKIE_URLS = new String[]{
-            "https://account.xiaomi.com",
             "https://i.mi.com",
-            "https://gallery.i.mi.com",
             "https://api.open.ai.xiaomi.com",
+            "https://gallery.i.mi.com",
+            "https://account.xiaomi.com",
             "https://xiaomi.com"
     };
+
+    /** Source domain per cookie key (key names only, never values) + duplicate-key info. */
+    private LinkedHashMap<String, String> lastMergeSources = new LinkedHashMap<String, String>();
+    private LinkedHashMap<String, String> lastMergeDupKeys = new LinkedHashMap<String, String>();
 
     private static final int COLOR_BG = 0xFF101418;
     private static final int COLOR_BAR = 0xFF1B2228;
@@ -462,6 +476,11 @@ public class LoginActivity extends Activity {
     /** "完成": run the in-WebView session self-test once, then export the cookie. */
     private void onDoneClick() {
         if (selfTestStatus == Integer.MIN_VALUE) {
+            // Merge first (priority order + source/dup diagnostics), then self-test, per spec.
+            try {
+                mergeCookies();
+            } catch (Throwable ignored) {
+            }
             runWebSessionSelfTest(true);
             if (statusView != null) {
                 statusView.setText("\u6b63\u5728\u81ea\u68c0\u7f51\u9875\u4f1a\u8bdd\u2026\u5b8c\u6210\u540e\u81ea\u52a8\u8fd4\u56de Cookie\u3002");
@@ -485,6 +504,8 @@ public class LoginActivity extends Activity {
         data.putExtra(EXTRA_COOKIE, cookie);
         data.putExtra(EXTRA_SELFTEST_STATUS, selfTestStatus);
         data.putExtra(EXTRA_SELFTEST_SNIPPET, selfTestSnippet);
+        data.putExtra(EXTRA_COOKIE_SOURCES, sourcesToJson(lastMergeSources));
+        data.putExtra(EXTRA_COOKIE_DUP_KEYS, joinKeys(lastMergeDupKeys));
         setResult(RESULT_OK, data);
         Log.i(TAG, "LoginActivity returned cookie length=" + cookie.length()
                 + ", selftest=" + selfTestStatus); // never log token values
@@ -644,8 +665,11 @@ public class LoginActivity extends Activity {
 
     private String mergeCookies() {
         LinkedHashMap<String, String> merged = new LinkedHashMap<String, String>();
+        lastMergeSources = new LinkedHashMap<String, String>();
+        lastMergeDupKeys = new LinkedHashMap<String, String>();
         CookieManager cm = CookieManager.getInstance();
         for (int i = 0; i < COOKIE_URLS.length; i++) {
+            String domain = domainOf(COOKIE_URLS[i]);
             String raw = null;
             try {
                 raw = cm.getCookie(COOKIE_URLS[i]);
@@ -671,16 +695,63 @@ public class LoginActivity extends Activity {
                     continue;
                 }
                 if (!merged.containsKey(name)) {
+                    // First domain in COOKIE_URLS priority order wins.
                     merged.put(name, value);
+                    lastMergeSources.put(name, domain);
+                } else if (!domain.equals(lastMergeSources.get(name))) {
+                    // Duplicate name from a lower-priority domain: dropped; record key only.
+                    lastMergeDupKeys.put(name, domain);
                 }
             }
         }
+        Log.i(TAG, "mergeCookies: keys=" + merged.size()
+                + ", dupDropped=" + lastMergeDupKeys.size()); // never log values
         StringBuilder sb = new StringBuilder();
         for (Map.Entry<String, String> entry : merged.entrySet()) {
             if (sb.length() > 0) {
                 sb.append("; ");
             }
             sb.append(entry.getKey()).append('=').append(entry.getValue());
+        }
+        return sb.toString();
+    }
+
+    private String domainOf(String url) {
+        if (url == null) {
+            return "";
+        }
+        String d = url;
+        if (d.startsWith("https://")) {
+            d = d.substring(8);
+        } else if (d.startsWith("http://")) {
+            d = d.substring(7);
+        }
+        int slash = d.indexOf('/');
+        if (slash >= 0) {
+            d = d.substring(0, slash);
+        }
+        return d;
+    }
+
+    private String sourcesToJson(LinkedHashMap<String, String> sources) {
+        try {
+            JSONObject o = new JSONObject();
+            for (Map.Entry<String, String> e : sources.entrySet()) {
+                o.put(e.getKey(), e.getValue());
+            }
+            return o.toString();
+        } catch (Throwable t) {
+            return "{}";
+        }
+    }
+
+    private String joinKeys(LinkedHashMap<String, String> map) {
+        StringBuilder sb = new StringBuilder();
+        for (String k : map.keySet()) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(k);
         }
         return sb.toString();
     }
