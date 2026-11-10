@@ -1,10 +1,16 @@
-# LSPosed 模块 v2.3.0：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
+# LSPosed 模块 v2.4.0：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
 
 > 交付物：`out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.1.0.apk`（源：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.1.0.apk`；legacy Xposed 模块，LSPosed 可用）
-> 版本：`versionCode 9 / versionName 2.3.0`，45,668 B，sha256 `64ac0fd8751eacc3159a46456e697ad0160e9c15217a87c32f72fef51c7eca1d`（两次构建字节一致）
+> 版本：`versionCode 10 / versionName 2.4.0`，45,668 B，sha256 `a8526e067c2e0fe890b237eab3fab7876c9e45df53f58638fac366dc39f67593`（两次构建字节一致）
 > 目标：小米 17 Ultra（`nezha` / `nezha_global`），HyperOS 4 / Android 17；`com.miui.mediaeditor`（相册-编辑）、可选 `com.android.camera`（配 Magisk CameraOnly）、`com.miui.gallery`（占位）
 >
 > ✅ **本版本完全不伪装系统属性**：不做 `resetprop`、不 hook `android.os.SystemProperties`、不修改任何 `ro.*` 值。改为**直接 hook App 内部的门禁判定方法**返回 `true`（只影响被 hook 的两个进程）。仍为静态分析产物，**未真机运行验证**。
+
+> **v2.4.0 更新（按用户要求：不使用系统账号 Cookie）**：
+> ① **彻底移除系统账号 Cookie 路径**：删除「系统账号捕获的 Cookie」「登录系统小米账号」「填入捕获的 Cookie」、Cookie 来源模式（auto/manual/captured）及其回退逻辑；HookEntry 不再捕获/上报 App 原生的系统账号 STS Cookie；无用户 Cookie 时原逻辑直接透传，不读取不记录；
+> ② Cookie 来源仅限：**用户手动粘贴**或**本模块全屏网页登录**导出的 Cookie；
+> ③ 新增**网页会话自检**（LoginActivity 内 `evaluateJavascript` 发起带凭据的 fetch 到 `i.mi.com/status/lite/setting?type=1`，经 `@JavascriptInterface` 回传 HTTP 码与脱敏摘要）——用于区分"网页未登录/STS 未完成（401）"与"网页会话有效但导出的 Cookie 被 App 云 API 拒绝"；
+> ④ 体检保留 UA 自适应，并增加 `Referer: https://i.mi.com/`、`Accept-Language: zh-CN`；若自检 200 而体检 401，UI 会明确说明这是网页 Cookie 与 App 云 API 鉴权链路差异（服务端行为，客户端无法修复）。
 
 > **v2.3.0 更新（解决 WebView 难用 + 网页 Cookie 401）**：
 > ① 新增**全屏登录 Activity**（`LoginActivity`：顶栏 返回/刷新/完成、进度条、错误提示、返回键处理、`i.mi.com/sts` 一次性自动恢复），替代原先内嵌的小 WebView；
@@ -97,9 +103,10 @@
 
 ## 5. 验证状态（静态）
 
-- 可复现构建：两次构建 sha256 一致（`64ac0fd8…ca1d`，45,668 B，vc=9/vn=2.3.0）。
+- 可复现构建：两次构建 sha256 一致（`a8526e06…7593`，45,668 B，vc=10/vn=2.4.0）。
 - 签名：apksigner `Verifies`，v1+v2+v3（`--min-sdk-version 21` 校验）。
-- APK：`classes.dex`（76,516 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=9/vn=2.3.0、minSdk 29/targetSdk 35、INTERNET；Manifest 含 `LoginActivity`(exported=false)；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- APK：`classes.dex`（72,400 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=10/vn=2.4.0、minSdk 29/targetSdk 35、INTERNET；Manifest 含 `LoginActivity`(exported=false)；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- dex 中已无任何系统账号 Cookie 路径字样（系统账号捕获/填入捕获/cookie_mode/captured_cookie/hyperos_sec_common/登录系统小米账号/set_captured_cookie 均为 0）。
 - v2.2.1 新增：WebView 错误处理方法（`onReceivedHttpError`/`onReceivedError`）、`i.mi.com/sts` 一次性自动恢复逻辑、直接打开 `https://i.mi.com/` 的登录/STS 入口；dex 中**已无**旧的无效应答 URL（`pass/serviceLogin?sid=i.mi.com` 与 `sts%3Fsign%3Dx` 均为 0）。
 - 新增功能字符串已验证入 dex（检测 Cookie、serviceToken、3 个探测端点、Cookie 组成检查、2.2.0）；**未硬编码任何用户凭据**（源码与 dex 中均无粘贴过的 userId/cUserId/deviceId 字面量）；Cookie 值不写入日志/诊断文件。
 - dex 中**不存在**任何属性伪装字符串：`ro.theme_customize`、`ro.miui.build.region`、`ro.theme_leica`、`ro.special_edition`、`SPOOF_PROPS`、`hookSystemProperties`、`resetprop`。
@@ -111,7 +118,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.3.0.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（45,668 B，sha256 `64ac0fd8…ca1d`） |
+| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.4.0.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（45,668 B，sha256 `a8526e06…7593`） |
 | `work/leica/lsposed/app/` | 模块源码（Java + manifest + xposed 元数据） |
 | `work/leica/lsposed/app/README_APP.md` | 用户指南（中文，含两条使用路径/排错） |
 | `work/leica/lsposed/build.sh` / `README_BUILD.md` | 无 Gradle 可复现构建 |
