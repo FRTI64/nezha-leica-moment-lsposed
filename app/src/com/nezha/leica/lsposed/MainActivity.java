@@ -87,11 +87,19 @@ public class MainActivity extends Activity {
             "https://xiaomi.com"
     };
 
-    /** Read-only GET endpoints used by the Cookie health probe (never POST). */
+    /**
+     * Read-only GET endpoints used by the Cookie health probe (never POST).
+     *
+     * <p>Chosen for a real auth signal: without a valid Xiaomi session the
+     * {@code /status/lite/setting?type=N} endpoint returns HTTP 401 with
+     * {@code {"R":401,...,"D":"...serviceLogin..."}}, while with a valid cookie it is not
+     * asked to log in again. The previous list was misleading: {@code gallery.i.mi.com}
+     * does not resolve (DNS), and {@code /gallery/public/resource/info} returns
+     * 200 + parameter-error JSON even without cookies (no auth signal).</p>
+     */
     private static final String[] PROBE_ENDPOINTS = new String[]{
-            "https://i.mi.com/status/lite/setting",
-            "https://gallery.i.mi.com",
-            "https://i.mi.com/gallery/public/resource/info"
+            "https://i.mi.com/status/lite/setting?type=1",
+            "https://i.mi.com/status/lite/setting?type=2"
     };
 
     private static final String[] KNOWN_COOKIE_KEYS = new String[]{
@@ -1053,12 +1061,16 @@ public class MainActivity extends Activity {
             Log.i(TAG, "probe " + endpoint + " -> HTTP " + code); // never log cookie/token values
             if (code >= 200 && code < 300) {
                 String snippet = sanitizeSnippet(redactCookieValues(body, cookie));
-                if (containsLoginMarker(body)) {
+                if (looksLikeLoginRequired(body)) {
+                    return new ProbeResult(endpoint, VERDICT_BAD, code,
+                            "\u670d\u52a1\u7aef\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08\u54cd\u5e94\u542b 401/\u767b\u5f55\u6807\u8bc6\uff09", snippet);
+                }
+                if (looksLikeParamError(body)) {
                     return new ProbeResult(endpoint, VERDICT_WARN, code,
-                            "HTTP 2xx \u4f46\u54cd\u5e94\u542b\u767b\u5f55\u63d0\u793a\uff08\u53ef\u80fd\u672a\u5b8c\u6210 STS\uff09", snippet);
+                            "\u672a\u88ab\u8981\u6c42\u767b\u5f55\uff0c\u4f46\u7aef\u70b9\u53c2\u6570\u4e0d\u8db3\uff08\u65e0\u6cd5\u636e\u6b64\u5224\u5b9a\uff09", snippet);
                 }
                 return new ProbeResult(endpoint, VERDICT_OK, code,
-                        "\u672a\u88ab\u62d2\u7edd\uff08Cookie \u88ab\u63a5\u53d7\uff09", snippet);
+                        "\u672a\u88ab\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08Cookie \u53ef\u80fd\u6709\u6548\uff09", snippet);
             }
             if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
                 String loc = location == null ? "" : location.toLowerCase(Locale.US);
@@ -1080,8 +1092,15 @@ public class MainActivity extends Activity {
                     sanitizeSnippet(redactCookieValues(body, cookie)));
         } catch (Throwable t) {
             Log.i(TAG, "probe " + endpoint + " -> network error " + t.getClass().getSimpleName());
-            return new ProbeResult(endpoint, VERDICT_BAD, -1,
-                    "\u7f51\u7edc\u4e0d\u53ef\u8fbe/\u8d85\u65f6\uff08" + t.getClass().getSimpleName() + "\uff09", "");
+            String kind;
+            if (t instanceof java.net.UnknownHostException) {
+                kind = "\u57df\u540d\u65e0\u6cd5\u89e3\u6790\uff08DNS/\u7f51\u7edc\u95ee\u9898\uff0c\u4e0d\u5224\u5b9a Cookie\uff09";
+            } else if (t instanceof java.net.SocketTimeoutException) {
+                kind = "\u8fde\u63a5\u8d85\u65f6\uff08\u7f51\u7edc\u95ee\u9898\uff0c\u4e0d\u5224\u5b9a Cookie\uff09";
+            } else {
+                kind = "\u7f51\u7edc\u4e0d\u53ef\u8fbe\uff08" + t.getClass().getSimpleName() + "\uff0c\u4e0d\u5224\u5b9a Cookie\uff09";
+            }
+            return new ProbeResult(endpoint, VERDICT_WARN, -1, kind, "");
         } finally {
             if (conn != null) {
                 try {
@@ -1136,17 +1155,21 @@ public class MainActivity extends Activity {
         }
         StringBuilder agg = new StringBuilder();
         if (bad > 0) {
-            agg.append("\u7ed3\u8bba\uff1a\u5b58\u5728\u88ab\u62d2\u7edd/\u91cd\u5b9a\u5411\u7684\u63a2\u6d4b\u3002\u5f53\u524d Cookie \u53ef\u80fd\u65e0\u6548"
-                    + "\u6216\u7f3a\u5c11 STS\uff08serviceToken\uff09\u3002\u5efa\u8bae\uff1a\u5b8c\u6210 i.mi.com STS \u540e\u91cd\u65b0\u8bfb\u53d6\uff0c"
-                    + "\u6216\u4f7f\u7528\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u7684 Cookie\u3002");
-        } else if (warn > 0) {
-            agg.append("\u7ed3\u8bba\uff1a\u90e8\u5206\u63a2\u6d4b\u7ed3\u679c\u4e0d\u786e\u5b9a\uff08\u53ef\u80fd\u672a\u5b8c\u6210 STS \u6216\u7aef\u70b9\u8981\u6c42"
-                    + "\u4e0d\u540c\u51ed\u636e\uff09\uff0c\u5176\u4f59\u672a\u88ab\u62d2\u7edd\u3002");
+            agg.append("\u7ed3\u8bba\uff1a\u68c0\u6d4b\u5230\u670d\u52a1\u7aef\u8981\u6c42\u91cd\u65b0\u767b\u5f55/\u62d2\u7edd\uff08\u89c1\u4e0a\u65b9\u7ea2\u8272\u9879\uff09\u3002\u5f53\u524d Cookie \u53ef\u80fd\u65e0\u6548\u3001\u5df2\u8fc7\u671f\u6216\u7f3a\u5c11 STS\uff08serviceToken\uff09\u3002"
+                    + "\u5efa\u8bae\uff1a\u7528\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\u91cd\u65b0\u767b\u5f55\u540e\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\uff0c\u6216\u4f7f\u7528\u300c\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u300d\u7684 Cookie \u540e\u91cd\u8bd5\u3002");
+            if (warn > 0) {
+                agg.append("\n\u53e6\u6709 ").append(warn).append(" \u4e2a\u7aef\u70b9\u4e0d\u786e\u5b9a\uff08\u7f51\u7edc/\u53c2\u6570\u95ee\u9898\uff09\uff0c\u4e0d\u5f71\u54cd\u4e0a\u8ff0\u5224\u65ad\u3002");
+            }
+        } else if (ok > 0 && warn == 0) {
+            agg.append("\u7ed3\u8bba\uff1a\u672a\u51fa\u73b0\u8981\u6c42\u91cd\u65b0\u767b\u5f55\u7684\u8ff9\u8c61 \u2192 \u5f53\u524d Cookie \u53ef\u80fd\u6709\u6548\uff08\u4ecd\u4ee5\u5b9e\u9645\u4e91\u7aef\u4efb\u52a1\u662f\u5426\u6210\u529f\u4e3a\u51c6\uff09\u3002");
+        } else if (ok > 0) {
+            agg.append("\u7ed3\u8bba\uff1a\u6709\u7aef\u70b9\u672a\u88ab\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff0c\u53e6\u6709 ").append(warn)
+                    .append(" \u4e2a\u7aef\u70b9\u4e0d\u786e\u5b9a\uff08\u7f51\u7edc/\u53c2\u6570\u95ee\u9898\uff09\u3002\u672a\u53d1\u73b0\u660e\u786e\u62d2\u7edd\u8ff9\u8c61\uff0c\u5fc5\u8981\u65f6\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5\u3002");
         } else {
-            agg.append("\u7ed3\u8bba\uff1a\u6240\u6709\u53ea\u8bfb\u63a2\u6d4b\u5747\u672a\u88ab\u62d2\u7edd \u2192 \u5f53\u524d Cookie \u5927\u6982\u7387\u6709\u6548\u3002");
+            agg.append("\u7ed3\u8bba\uff1a\u65e0\u6cd5\u5224\u5b9a\uff08\u7f51\u7edc\u4e0d\u53ef\u8fbe\u6216\u7aef\u70b9\u53c2\u6570\u4e0d\u8db3\uff09\u3002\u8fd9\u4e0d\u4ee3\u8868 Cookie \u65e0\u6548\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc/\u7a0d\u540e\u91cd\u8bd5\uff0c"
+                    + "\u6216\u76f4\u63a5\u5728\u76f8\u518c\u7f16\u8f91\u4e2d\u5b9e\u6d4b\u4e91\u7aef\u529f\u80fd\u3002");
         }
-        agg.append("\n\u6ce8\u610f\uff1a\u672c\u68c0\u6d4b\u4ec5\u9a8c\u8bc1 Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b\u4e91\u7aef\u6743\u76ca"
-                + "\uff08\u70b9\u6570/\u8bbe\u5907\u767d\u540d\u5355/\u786c\u4ef6\u8ba4\u8bc1 token\uff09\u7531\u5c0f\u7c73\u670d\u52a1\u7aef\u6821\u9a8c\uff0c"
+        agg.append("\n\u6ce8\u610f\uff1a\u672c\u68c0\u6d4b\u4ec5\u9a8c\u8bc1 Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b\u4e91\u7aef\u6743\u76ca\uff08\u70b9\u6570/\u8bbe\u5907\u767d\u540d\u5355/\u786c\u4ef6\u8ba4\u8bc1 token\uff09\u7531\u5c0f\u7c73\u670d\u52a1\u7aef\u6821\u9a8c\uff0c"
                 + "\u65e0\u6cd5\u901a\u8fc7\u672c\u68c0\u6d4b\u9a8c\u8bc1\u3002\u63a2\u6d4b\u7aef\u70b9\u4e3a\u53ea\u8bfb GET\uff0c\u53ef\u80fd\u968f\u670d\u52a1\u7aef\u8c03\u6574\u3002");
         probeAggregate.setText(agg.toString());
     }
@@ -1192,6 +1215,27 @@ public class MainActivity extends Activity {
             }
         }
         return false;
+    }
+
+    /** True when a 2xx response still asks the client to (re)login (e.g. {"R":401,...}). */
+    private boolean looksLikeLoginRequired(String body) {
+        if (body == null || body.isEmpty()) {
+            return false;
+        }
+        String lower = body.toLowerCase(Locale.US).replace(" ", "");
+        return lower.contains("\"r\":401") || lower.contains("servicelogin")
+                || lower.contains("\"code\":70016") || containsLoginMarker(body);
+    }
+
+    /** True for internal-API parameter errors (missing required args); these carry no auth signal. */
+    private boolean looksLikeParamError(String body) {
+        if (body == null || body.isEmpty()) {
+            return false;
+        }
+        String lower = body.toLowerCase(Locale.US);
+        return lower.contains("\u53c2\u6570") || lower.contains("\"code\":10008")
+                || lower.contains("\"code\":10016") || lower.contains("is empty")
+                || lower.contains("parameter");
     }
 
     private String sanitizeSnippet(String raw) {
