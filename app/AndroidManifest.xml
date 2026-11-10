@@ -5,14 +5,24 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.nezha.leica.lsposed"
-    android:versionCode="13"
-    android:versionName="2.4.3">
+    android:versionCode="14"
+    android:versionName="2.5.0">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- v2.5.0: force-launch card - read latest photo from MediaStore (runtime requested). -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 
     <uses-sdk
         android:minSdkVersion="29"
         android:targetSdkVersion="35" />
+
+    <!-- Package visibility (Android 11+): needed to check/launch LegendaryActivity. -->
+    <queries>
+        <package android:name="com.miui.mediaeditor" />
+    </queries>
 
     <application
         android:allowBackup="false"
