@@ -1,0 +1,7 @@
+# 构建中间产物 / 工具链（本地下载，不入库）
+toolchain/
+build/
+dist/
+*.idsig
+# 系统文件
+.DS_Store
