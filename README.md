@@ -1,12 +1,12 @@
 # nezha-leica-moment-lsposed
 
-**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.2.2 —— 零属性伪装**
+**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.3.0 —— 零属性伪装**
 
 > ✅ 不 resetprop、不 hook `SystemProperties`、不修改任何 `ro.*` 属性：改为**直接 hook App 内部判定方法**返回 true（仅影响被 hook 进程）。
-> 同时保留小米账号 Cookie 登录/注入、未登录兜底；v2.2.2 修复 Cookie 体检误报（改用真实鉴权信号端点）；v2.2.1 修复 STS 网页错误（`net::ERR_HTTP_RESPONSE_CODE_FAILURE`，旧版 sign=x 占位符问题）；v2.2.0 新增 **Cookie 体检（只读 GET 探测）**、**WebView STS 助手（补 serviceToken）** 与**卡片式新 UI**。CTA 不强制、不伪造硬件认证、不绕过服务端权益。
+> 同时保留小米账号 Cookie 登录/注入、未登录兜底；v2.3.0 新增**全屏登录**（替代难用的内嵌小 WebView）与 **Cookie 来源模式 auto/manual/captured**（系统账号捕获的 STS Cookie 可自动注入，零操作）；v2.2.2 修复 Cookie 体检误报（真实鉴权信号端点 + UA 自适应）；v2.2.1 修复 STS 网页错误（`net::ERR_HTTP_RESPONSE_CODE_FAILURE`，旧版 sign=x 占位符问题）；v2.2.0 新增 **Cookie 体检（只读 GET 探测）**、**WebView STS 助手（补 serviceToken）** 与**卡片式新 UI**。CTA 不强制、不伪造硬件认证、不绕过服务端权益。
 
 - 目标：`com.miui.mediaeditor`（相册-编辑，国际版 2.10.40.4.8-global / 国行 2.10.43.0.6）；可选 `com.android.camera`（配 Magisk CameraOnly 提供国行 MiuiCamera 6.7 APK）。
-- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.2.2.apk`（41,572 B，sha256 `7572c80e…0c99`，versionCode 8）。
+- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.3.0.apk`（45,668 B，sha256 `64ac0fd8…ca1d`，versionCode 9）。
 - 未真机验证；仅供个人设备本地研究与自用修改。
 
 ---
@@ -84,6 +84,13 @@ VERSION_CODE=5 VERSION_NAME=2.1.0 ./build.sh app dist/LeicaMoment_LSPosed_v2.1.0
 - apksigner `Verifies`（v1+v2+v3，`--min-sdk-version 21`）；`aapt2 dump badging` 正常；dex 内 0 个 `de.robv` 类定义。
 - dex 中**不存在** `ro.theme_customize`/`ro.miui.build.region`/`ro.theme_leica`/`ro.special_edition`/`SPOOF_PROPS`/`hookSystemProperties`/`resetprop`（零属性伪装证据）。
 - Hook 目标均有两版 smali 证据（`docs/`）。
+
+## 5.3 v2.3.0 更新：全屏登录 + Cookie 来源模式
+
+- **全屏登录**：新增 `LoginActivity`（顶栏 返回/刷新/完成、进度条、错误提示、返回键、`i.mi.com/sts` 一次性自动恢复），替代原先内嵌小 WebView；「完成」自动合并 5 个小米域 Cookie 并回填。
+- **Cookie 来源模式**：`auto`（默认，手动→系统捕获）/`manual`/`captured`；**Hook 注入按同一优先级**，系统账号已登录的设备可**零操作自动注入 App 原生 STS Cookie**（hyperos_sec_common_*/serviceToken）。
+- **UA 自适应体检**：`pass_ua=web` 的 Cookie 先按 Web UA 探测，401 后自动换 MiuiGallery UA 重试；若网页 Cookie 被拒而系统捕获 Cookie 存在，会提示切换来源。
+- 推荐流程：系统设置登录小米账号 → 打开相册-编辑一次触发 App 取 STS Cookie（自动捕获）→ 来源「自动/系统捕获」→ 保存 → 清相册缓存 → 强制停止 mediaeditor/相册 → 实测。WebView 仅作备用。
 
 ## 5.2 v2.2.2 修复：Cookie 体检误报
 
