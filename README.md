@@ -1,12 +1,12 @@
 # nezha-leica-moment-lsposed
 
-**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.4.0 —— 零属性伪装**
+**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.4.1 —— 零属性伪装**
 
 > ✅ 不 resetprop、不 hook `SystemProperties`、不修改任何 `ro.*` 属性：改为**直接 hook App 内部判定方法**返回 true（仅影响被 hook 进程）。
 > 同时保留小米账号 Cookie 登录/注入、未登录兜底；**v2.4.0 按用户要求彻底移除系统账号 Cookie 路径**（Cookie 来源仅限手动粘贴/全屏网页登录），并新增**网页会话自检**；v2.3.0 的全屏登录与 UA 自适应体检保留；v2.2.2 修复 Cookie 体检误报（真实鉴权信号端点 + UA 自适应）；v2.2.1 修复 STS 网页错误（`net::ERR_HTTP_RESPONSE_CODE_FAILURE`，旧版 sign=x 占位符问题）；v2.2.0 新增 **Cookie 体检（只读 GET 探测）**、**WebView STS 助手（补 serviceToken）** 与**卡片式新 UI**。CTA 不强制、不伪造硬件认证、不绕过服务端权益。
 
 - 目标：`com.miui.mediaeditor`（相册-编辑，国际版 2.10.40.4.8-global / 国行 2.10.43.0.6）；可选 `com.android.camera`（配 Magisk CameraOnly 提供国行 MiuiCamera 6.7 APK）。
-- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.4.0.apk`（45,668 B，sha256 `a8526e06…7593`，versionCode 10）。
+- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.4.1.apk`（49,764 B，sha256 `939f0343…e30c`，versionCode 11）。
 - 未真机验证；仅供个人设备本地研究与自用修改。
 
 ---
@@ -84,6 +84,13 @@ VERSION_CODE=5 VERSION_NAME=2.1.0 ./build.sh app dist/LeicaMoment_LSPosed_v2.1.0
 - apksigner `Verifies`（v1+v2+v3，`--min-sdk-version 21`）；`aapt2 dump badging` 正常；dex 内 0 个 `de.robv` 类定义。
 - dex 中**不存在** `ro.theme_customize`/`ro.miui.build.region`/`ro.theme_leica`/`ro.special_edition`/`SPOOF_PROPS`/`hookSystemProperties`/`resetprop`（零属性伪装证据）。
 - Hook 目标均有两版 smali 证据（`docs/`）。
+
+## 5.5 v2.4.1 更新：真实目标 AI 云平台探测 + Cookie 合并优先级修复
+
+- 新增只读 POST 探测「AI 云平台（真实目标 API）」：`api.open.ai.xiaomi.com/aiPhotoCloud/api/legendV2/list`（body `{}`，不扣费/不创建任务），UA 自适应（Web/桌面 Chrome/MiuiGallery）；这比 i.mi.com micloud 探测更贴近「二次增强」实际鉴权。
+- **Cookie 合并优先级修复**：`i.mi.com > api.open.ai.xiaomi.com > gallery.i.mi.com > account.xiaomi.com > xiaomi.com`，避免 account.xiaomi.com 的同名 serviceToken 覆盖云端 token（可能是此前 401 的原因）；组成检查/诊断显示每键来源域名（仅键名）。
+- 「复制诊断信息」按钮（版本、端点 HTTP 码、UA 类型、自检结果、Cookie 键名/长度/来源域名，绝不含令牌值）。
+- 结论措辞：micloud 401 但 AI 云平台未拒绝 → 实际二次增强可能仍可用（以实测为准）；两者均 401 → 网页 Cookie 不被云鉴权接受（服务端行为，不使用系统账号 Cookie 则客户端无法修复）。
 
 ## 5.4 v2.4.0 更新：移除系统账号 Cookie（用户要求）+ 网页会话自检
 
