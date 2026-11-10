@@ -21,6 +21,9 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -57,12 +60,20 @@ public class MainActivity extends Activity {
     private static final String TAG = "LeicaMomentLSP";
 
     /** Xiaomi passport login page (same one the CN ROM uses for the account flow). */
-    private static final String LOGIN_URL =
-            "https://account.xiaomi.com/pass/serviceLogin?sid=i.mi.com&callback="
-                    + "https%3A%2F%2Fi.mi.com%2Fsts%3Fsign%3Dx%26followup%3Dhttps%253A%252F%252Fi.mi.com%252Fvip";
+    /**
+     * Primary entry: open i.mi.com directly. The i.mi.com web front-end starts the real
+     * passport login -> STS redirect chain with a VALID sign parameter.
+     *
+     * <p>NOTE: an earlier build used a handcrafted
+     * {@code account.xiaomi.com/pass/serviceLogin?...callback=i.mi.com/sts?sign=x...} URL;
+     * {@code sign=x} is only a placeholder copied from ROM strings. The passport service
+     * echoed that invalid sign and the STS callback returned an HTTP error page, which
+     * WebView reports as {@code net::ERR_HTTP_RESPONSE_CODE_FAILURE}. Do not reintroduce it.</p>
+     */
+    private static final String LOGIN_URL = "https://i.mi.com/";
 
-    /** Opening i.mi.com triggers Xiaomi STS / serviceToken issuance for .mi.com/.xiaomi.com. */
-    private static final String STS_URL = "https://i.mi.com/";
+    /** Fallback: Xiaomi account page (if the i.mi.com redirect chain misbehaves). */
+    private static final String ACCOUNT_URL = "https://account.xiaomi.com/";
 
     /** Generic gallery UA; the cloud API uses MiuiGallery/<versionCode>. */
     private static final String PROBE_UA = "MiuiGallery/210994048";
@@ -128,6 +139,8 @@ public class MainActivity extends Activity {
     private TextView probeRow;
     private LinearLayout webContainer;
     private WebView webView;
+    /** One-shot auto-recovery guard for an HTTP error on the i.mi.com/sts callback page. */
+    private boolean stsErrorRecovered = false;
     private EditText cookieEdit;
     private LinearLayout inspectorChips;
     private TextView inspectorSummary;
@@ -322,20 +335,21 @@ public class MainActivity extends Activity {
     private void buildCookieCard() {
         LinearLayout body = sectionCard("\u2461 \u8d26\u53f7\u4e0e Cookie");
 
-        TextView hint = text("WebView \u767b\u5f55\u7528\u4e8e\u6293 Cookie\uff1b\u82e5\u4e91 API \u9700\u8981 STS\uff0c"
-                + "\u8bf7\u518d\u6253\u5f00 i.mi.com \u5b8c\u6210 STS \u540e\u91cd\u65b0\u8bfb\u53d6\u3002", 12, colorTextDim, false);
+        TextView hint = text("\u63a8\u8350\u76f4\u63a5\u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\uff1a"
+                + "i.mi.com \u4f1a\u81ea\u52a8\u8df3\u8f6c\u8d26\u53f7\u767b\u5f55\u5e76\u5b8c\u6210 STS\uff08\u4e0b\u53d1 serviceToken\uff09\uff0c"
+                + "\u5b8c\u6210\u540e\u518d\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002", 12, colorTextDim, false);
         hint.setPadding(0, 0, 0, dp(4));
         body.addView(hint);
 
         LinearLayout row1 = buttonRow(body);
-        addRowButton(row1, "\u6253\u5f00\u767b\u5f55\u9875", "\u6253\u5f00\u5c0f\u7c73\u8d26\u53f7\u767b\u5f55\u9875", true,
+        addRowButton(row1, "\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09", "\u76f4\u63a5\u6253\u5f00 i.mi.com\uff0c\u81ea\u52a8\u8d70\u767b\u5f55\u4e0e STS", true,
                 new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
                         onLoginClick();
                     }
                 });
-        addRowButton(row1, "\u53bb i.mi.com \u5b8c\u6210 STS", "\u6253\u5f00 i.mi.com \u4ee5\u83b7\u53d6 serviceToken",
+        addRowButton(row1, "\u6253\u5f00\u5c0f\u7c73\u8d26\u53f7\u9875\uff08\u5907\u7528\uff09", "\u5907\u7528\uff1a\u6253\u5f00 account.xiaomi.com",
                 false, new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
@@ -401,8 +415,49 @@ public class MainActivity extends Activity {
                 @Override
                 public void onPageFinished(WebView view, String url) {
                     setActionStatus("\u7f51\u9875\u5df2\u52a0\u8f7d\uff1a" + url
-                            + "\n\u767b\u5f55\u5b8c\u6210\u540e\u8bf7\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\uff1b"
-                            + "STS \u9700\u6253\u5f00 i.mi.com \u5b8c\u6210\u540e\u518d\u8bfb\u53d6\u3002");
+                            + "\n\u767b\u5f55/STS \u5b8c\u6210\u540e\uff0c\u8bf7\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002");
+                }
+
+                @Override
+                public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                                                WebResourceResponse errorResponse) {
+                    if (request == null || !request.isForMainFrame()) {
+                        return;
+                    }
+                    int code = errorResponse == null ? -1 : errorResponse.getStatusCode();
+                    String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                    // One-shot recovery: an HTTP error on the i.mi.com/sts callback usually
+                    // means the sign/login state is stale. Go back to i.mi.com and let it
+                    // re-run the whole login -> STS chain with a fresh, valid sign.
+                    if (!stsErrorRecovered && url.contains("i.mi.com/sts")) {
+                        stsErrorRecovered = true;
+                        setActionStatus("STS \u56de\u8c03\u9875\u8fd4\u56de HTTP " + code
+                                + "\uff08\u5e38\u89c1\u4e8e\u65e7 sign/\u767b\u5f55\u6001\u5931\u6548\uff09\uff0c"
+                                + "\u5df2\u81ea\u52a8\u56de\u5230 i.mi.com \u91cd\u65b0\u8d70\u767b\u5f55\u6d41\u7a0b\u2026");
+                        try {
+                            view.loadUrl(LOGIN_URL);
+                        } catch (Throwable ignored) {
+                        }
+                        return;
+                    }
+                    setActionStatus("\u7f51\u9875\u8fd4\u56de HTTP " + code + "\uff1a" + url
+                            + "\n\u5efa\u8bae\u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\u91cd\u8bd5\uff1b"
+                            + "\u82e5\u4ecd\u5931\u8d25\uff0c\u8bf7\u6539\u7528\u300c\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u300d\u6216\u624b\u52a8\u7c98\u8d34 Cookie\u3002");
+                }
+
+                @Override
+                public void onReceivedError(WebView view, WebResourceRequest request,
+                                            WebResourceError error) {
+                    if (request == null || !request.isForMainFrame()) {
+                        return;
+                    }
+                    int code = error == null ? -1 : error.getErrorCode();
+                    String desc = error == null || error.getDescription() == null
+                            ? "" : String.valueOf(error.getDescription());
+                    String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                    setActionStatus("\u7f51\u9875\u52a0\u8f7d\u5931\u8d25\uff08" + code + " " + desc + "\uff09\uff1a" + url
+                            + "\n\u8bf7\u68c0\u67e5\u7f51\u7edc\uff1b\u82e5\u4e3a i.mi.com/sts \u62a5\u9519\uff0c"
+                            + "\u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\u91cd\u8d70\u767b\u5f55\u3002");
                 }
             });
             webView = wv;
@@ -743,10 +798,12 @@ public class MainActivity extends Activity {
             return;
         }
         try {
+            stsErrorRecovered = false;
             webView.loadUrl(LOGIN_URL);
-            setActionStatus("\u5df2\u6253\u5f00\u5c0f\u7c73\u8d26\u53f7\u767b\u5f55\u9875\u3002\u767b\u5f55\u6210\u529f\u540e\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002");
+            setActionStatus("\u5df2\u6253\u5f00 i.mi.com\uff1a\u672a\u767b\u5f55\u65f6\u4f1a\u81ea\u52a8\u8df3\u8f6c\u5c0f\u7c73\u8d26\u53f7\u767b\u5f55\uff0c"
+                    + "\u767b\u5f55\u540e\u81ea\u52a8\u5b8c\u6210 STS \u5e76\u8fd4\u56de i.mi.com\u3002\u5b8c\u6210\u540e\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002");
         } catch (Throwable t) {
-            setActionStatus("\u6253\u5f00\u767b\u5f55\u9875\u5931\u8d25\uff1a" + t);
+            setActionStatus("\u6253\u5f00 i.mi.com \u5931\u8d25\uff1a" + t);
         }
     }
 
@@ -757,11 +814,12 @@ public class MainActivity extends Activity {
             return;
         }
         try {
-            webView.loadUrl(STS_URL);
-            setActionStatus("\u5df2\u6253\u5f00 i.mi.com\uff1a\u767b\u5f55\u72b6\u6001\u4e0b\u8bbf\u95ee\u4f1a\u89e6\u53d1 STS"
-                    + "\uff08serviceToken\uff09\u3002\u5b8c\u6210\u540e\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002");
+            webView.loadUrl(ACCOUNT_URL);
+            setActionStatus("\u5df2\u6253\u5f00\u5c0f\u7c73\u8d26\u53f7\u9875\uff08\u5907\u7528\uff09\u3002\u5efa\u8bae\u4f18\u5148\u4f7f\u7528"
+                    + "\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\uff1b\u8fd9\u91cc\u767b\u5f55\u540e\u8bf7\u56de\u5230 i.mi.com "
+                    + "\u5b8c\u6210 STS\uff0c\u7136\u540e\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002");
         } catch (Throwable t) {
-            setActionStatus("\u6253\u5f00 i.mi.com \u5931\u8d25\uff1a" + t);
+            setActionStatus("\u6253\u5f00\u5c0f\u7c73\u8d26\u53f7\u9875\u5931\u8d25\uff1a" + t);
         }
     }
 
@@ -1508,8 +1566,8 @@ public class MainActivity extends Activity {
                 + "\u82e5\u4f7f\u7528\u76f8\u673a\u300c\u5f95\u5361\u4e00\u77ac\u300d\u518d\u52fe\u9009 com.android.camera\uff1b"
                 + "com.miui.gallery \u53ef\u9009\u3002\u4fdd\u5b58\u540e\u5efa\u8bae\u91cd\u542f\u624b\u673a\u4e00\u6b21\u3002\n");
         sb.append("3. Cookie\uff1a\u4efb\u9009\u4e00\u79cd\u6765\u6e90\uff1a\n");
-        sb.append("   a) \u70b9\u300c\u6253\u5f00\u767b\u5f55\u9875\u300d\u5728\u7f51\u9875\u767b\u5f55\u5c0f\u7c73\u8d26\u53f7\uff0c"
-                + "\u5b8c\u6210\u540e\u70b9\u300c\u53bb i.mi.com \u5b8c\u6210 STS\u300d\uff0c\u518d\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\uff1b\n");
+        sb.append("   a) \u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\uff1ai.mi.com \u4f1a\u81ea\u52a8\u8df3\u8f6c"
+                + "\u8d26\u53f7\u767b\u5f55\u5e76\u5b8c\u6210 STS\uff0c\u5b8c\u6210\u540e\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\uff1b\n");
         sb.append("   b) \u624b\u52a8\u7c98\u8d34 Cookie\uff1b\n");
         sb.append("   c) \u7cfb\u7edf\u8d26\u53f7\u767b\u5f55\u540e\u6253\u5f00\u76f8\u518c\u2192\u7f16\u8f91\u89e6\u53d1\u4e00\u6b21\u4e91\u7aef\u8bf7\u6c42\uff0c"
                 + "\u6a21\u5757\u81ea\u52a8\u6355\u83b7 App \u53d6\u5230\u7684 STS Cookie\uff0c\u518d\u70b9\u300c\u586b\u5165\u6355\u83b7\u7684 Cookie\u300d\u3002\n");
@@ -1525,7 +1583,7 @@ public class MainActivity extends Activity {
         sb.append("\u00b7 Cookie \u4f53\u68c0\u4ec5\u9a8c\u8bc1 Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b\u4e91\u7aef\u6743\u76ca\uff08\u70b9\u6570/\u8bbe\u5907\u767d\u540d\u5355/"
                 + "\u786c\u4ef6\u8ba4\u8bc1 token\uff09\u4ecd\u7531\u5c0f\u7c73\u670d\u52a1\u7aef\u6821\u9a8c\u3002\n");
         sb.append("\u00b7 WebView \u767b\u5f55\u5f97\u5230\u7684\u662f\u7f51\u9875 Cookie\uff0c\u53ef\u80fd\u4e0d\u542b serviceToken\uff1b"
-                + "\u8bf7\u5148\u53bb i.mi.com \u5b8c\u6210 STS\uff0c\u6216\u7528\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u3002\n");
+                + "\u8bf7\u5148\u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\u5b8c\u6210 STS\uff0c\u6216\u7528\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u3002\n");
         sb.append("\u00b7 \u7f16\u8f91\u5668\u4fa7\u65e0\u9700 Magisk\uff1b\u76f8\u673a\u300c\u5f95\u5361\u4e00\u77ac\u300d\u9700\u8981 Magisk CameraOnly "
                 + "\u53d8\u4f53\uff08\u4ec5\u53ea\u8bfb\u6302\u8f7d\u56fd\u884c MiuiCamera.apk\uff0c\u65e0\u5c5e\u6027\u4fee\u6539\uff09+ \u672c\u6a21\u5757\u3002\n");
         sb.append("\u00b7 \u76f8\u673a\u9650\u5236\uff1a\u5382\u5546 HAL \u7684 legendary \u80fd\u529b\u4e0e\u8fd0\u884c\u65f6 legend_mode SDK "
