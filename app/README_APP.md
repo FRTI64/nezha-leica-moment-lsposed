@@ -175,18 +175,27 @@ HyperOS 4 引入了大量 Rust 组件：
   - 「登录系统小米账号」与「填入捕获的 Cookie」保留；捕获区只显示键名与长度，不直接显示令牌值。
 - **③ Cookie 体检（只读探测）**：点「检测 Cookie 有效性」后，后台线程对以下 **GET 只读端点**
   发起请求（8 秒超时、不跟随重定向，以便识别登录跳转）：
-  1. `https://i.mi.com/status/lite/setting`
-  2. `https://gallery.i.mi.com`
-  3. `https://i.mi.com/gallery/public/resource/info`
+  1. `https://i.mi.com/status/lite/setting?type=1`（强鉴权信号：未登录/无效 Cookie 返回 HTTP 401 + `{"R":401,...serviceLogin...}`）
+  2. `https://i.mi.com/status/lite/setting?type=2`（同上，交叉验证）
 
-  每个端点显示颜色化结论：绿色「未被拒绝（Cookie 被接受）」；黄色「部分不确定 / 非登录重定向 /
-  2xx 但响应含登录提示」；红色「未登录/凭据无效（重定向登录）」「凭据被拒绝（401/403）」
-  「网络不可达/超时」。结果附带 HTTP 状态码与**已脱敏**的短响应摘要。
-  聚合结论会明确说明：**体检只验证 Cookie 是否被接受，云端权益（点数/设备白名单/硬件认证 token）
-  仍由小米服务端校验，无法通过客户端验证**；探测端点可能随服务端调整。
+  判定规则（v2.2.2 修正）：
+  - 绿色「未被要求重新登录（Cookie 可能有效）」：HTTP 2xx 且响应无登录/401 标识、无参数错误；
+  - 黄色「端点参数不足（无法据此判定）」：HTTP 2xx 但响应是内部 API 的缺参错误（如 `code:10008/10016`）；
+  - 黄色「网络不可达/DNS/超时（不判定 Cookie）」：网络异常**不再被当作 Cookie 无效**；
+  - 红色「服务端要求重新登录」：HTTP 401/403 或 2xx 响应含 `"R":401`/`serviceLogin`；
+  - 红色「重定向到登录页」：3xx 且 Location 指向 login/passport。
+  聚合结论按红/绿/黄组合给出；**只有红色才算"可能无效"**，网络/参数问题不代表 Cookie 无效。
+  体检只验证 Cookie 是否被接受，云端权益（点数/设备白名单/硬件认证 token）仍由小米服务端校验；
+  探测端点可能随服务端调整。
 - **④ 功能开关**：门禁解锁（直接方法 Hook，不修改任何系统属性）、Cookie 注入；
   CTA 开关为不可用状态（本模块有意不强制 CTA）。
 - **⑤ 使用说明与限制**：可折叠，内容与第 2~9 节一致。
+
+**v2.2.2 修复说明（Cookie 体检误报）：** 旧版体检使用 `gallery.i.mi.com`（DNS 不解析）与
+`/gallery/public/resource/info`（无 Cookie 也返回 200 + 缺参错误，无鉴权信号），并把网络异常/参数错误
+当作"认证失败"，导致明明已拿到含 `serviceToken` 的 Cookie 却给出"可能无效"的误导结论。v2.2.2 改用
+`/status/lite/setting?type=1|2`（未登录时明确的 HTTP 401 + serviceLogin 响应），并区分
+绿/黄/红三级；网络与参数问题只算"无法判定"，不再误判 Cookie 无效。
 
 **v2.2.1 修复说明（网页打不开问题）：** 旧版本（v2.2.0 及以前）的「打开登录页」使用手工拼接的
 passport URL，其中 `callback=...i.mi.com/sts?sign=x...` 的 `sign=x` 只是从 ROM 字符串复制的占位符。
