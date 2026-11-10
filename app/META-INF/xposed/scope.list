@@ -1,0 +1,4 @@
+# LSPosed scope list (one package per line). For legacy modules the user must
+# also tick the scope manually in LSPosed Manager; kept here for completeness.
+com.miui.mediaeditor
+com.miui.gallery
