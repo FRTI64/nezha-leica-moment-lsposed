@@ -23,14 +23,10 @@ import android.util.Log;
  * (the camera process only receives the gate toggle; cookie fields are
  * stripped for it) and the module app itself.</p>
  *
- * <p>Supported methods:</p>
- * <ul>
- *   <li>{@code get_config} -&gt; Bundle{cookie, captured_cookie, enable_gate_bypass,
- *       enable_cookie, force_cta, module_version}</li>
- *   <li>{@code set_captured_cookie} extras{cookie} -&gt; Bundle{ok} (the hooked
- *       process reports the real Xiaomi STS cookie it just fetched)</li>
- *   <li>{@code get_captured_cookie} -&gt; Bundle{cookie}</li>
- * </ul>
+ * <p>v2.4.0: the system-account cookie path was removed entirely. The only
+ * supported method is {@code get_config} -&gt; Bundle{cookie (user-supplied
+ * only), enable_gate_bypass, enable_cookie, force_cta, module_version}. The
+ * hooked process never reports any cookie back.</p>
  */
 public class CookieConfigProvider extends ContentProvider {
 
@@ -98,46 +94,10 @@ public class CookieConfigProvider extends ContentProvider {
             Bundle config = ModuleConfig.buildConfigBundle(ctx);
             if (CAMERA_PACKAGE.equals(callerPackage)) {
                 // The camera process only needs the gate-bypass toggle; never expose
-                // the Xiaomi account cookie to it.
+                // the user cookie to it.
                 config.putString("cookie", "");
-                config.putString("captured_cookie", "");
             }
             return config;
-        }
-
-        if (ModuleConfig.METHOD_SET_CAPTURED_COOKIE.equals(method)) {
-            Bundle out = new Bundle();
-            if (CAMERA_PACKAGE.equals(callerPackage)) {
-                out.putBoolean("ok", false);
-                out.putString("error", "camera package may not store cookies");
-                return out;
-            }
-            String cookie = extras == null ? null : extras.getString("cookie");
-            if (cookie != null) {
-                cookie = cookie.trim();
-            }
-            if (cookie != null && !cookie.isEmpty()) {
-                ModuleConfig.prefs(ctx).edit()
-                        .putString(ModuleConfig.KEY_CAPTURED_COOKIE, cookie)
-                        .apply();
-                Log.i(TAG, "CookieConfigProvider: captured cookie stored ("
-                        + cookie.length() + " chars) from uid=" + callingUid);
-                out.putBoolean("ok", true);
-            } else {
-                out.putBoolean("ok", false);
-            }
-            return out;
-        }
-
-        if (ModuleConfig.METHOD_GET_CAPTURED_COOKIE.equals(method)) {
-            Bundle out = new Bundle();
-            if (CAMERA_PACKAGE.equals(callerPackage)) {
-                out.putString("cookie", "");
-                return out;
-            }
-            out.putString("cookie", ModuleConfig.prefs(ctx)
-                    .getString(ModuleConfig.KEY_CAPTURED_COOKIE, ""));
-            return out;
         }
 
         Log.w(TAG, "CookieConfigProvider: unknown method " + method);
