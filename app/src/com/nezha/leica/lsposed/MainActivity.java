@@ -1,12 +1,21 @@
 package com.nezha.leica.lsposed;
 
+import android.Manifest;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ComponentName;
+import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Build;
+import android.provider.MediaStore;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -56,6 +65,19 @@ public class MainActivity extends Activity {
     private static final String TAG = "LeicaMomentLSP";
 
     private static final int REQ_LOGIN = 1001;
+    private static final int REQ_PICK_IMAGE = 1002;
+    private static final int REQ_PERM_MEDIA = 1003;
+
+    /** Literal kept as a constant so it is verifiable in the dex (also self-documenting). */
+    private static final String ACTION_OPEN_DOCUMENT = "android.intent.action.OPEN_DOCUMENT";
+
+    /** Explicit LegendaryActivity component + fallbacks (obfuscation/alias variants). */
+    private static final String LEGENDARY_PACKAGE = "com.miui.mediaeditor";
+    private static final String[] LEGENDARY_COMPONENT_VARIANTS = new String[]{
+            "com.miui.mediaeditor/com.miui.mediaeditor.legendary.LegendaryActivity",
+            "com.miui.mediaeditor/.legendary.LegendaryActivity",
+            "com.miui.mediaeditor/com.miui.mediaeditor.LegendaryActivity"
+    };
 
     /** Generic gallery UA; the cloud API uses MiuiGallery/<versionCode>. */
     private static final String PROBE_UA = "MiuiGallery/210994048";
@@ -138,6 +160,9 @@ public class MainActivity extends Activity {
     private LinearLayout probeResults;
     private TextView probeAggregate;
     private TextView cloudTraceView;
+    private TextView forceLaunchStatus;
+    private String lastPickedUri = "";
+    private String lastLaunchComponent = "";
     private CheckBox cbGate;
     private CheckBox cbCookie;
     private TextView helpView;
@@ -187,6 +212,29 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_PICK_IMAGE) {
+            try {
+                if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                    setForceLaunchStatus("\u5df2\u53d6\u6d88\u9009\u62e9\u7167\u7247\u3002");
+                    return;
+                }
+                Uri uri = data.getData();
+                try {
+                    getContentResolver().takePersistableUriPermission(uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Throwable ignored) {
+                }
+                String displayName = null;
+                try {
+                    displayName = uri.getLastPathSegment();
+                } catch (Throwable ignored) {
+                }
+                launchLegendaryActivity(uri, displayName);
+            } catch (Throwable t) {
+                setForceLaunchStatus("\u5904\u7406\u9009\u62e9\u7684\u7167\u7247\u5931\u8d25\uff1a" + t);
+            }
+            return;
+        }
         if (requestCode != REQ_LOGIN) {
             return;
         }
@@ -321,6 +369,7 @@ public class MainActivity extends Activity {
         buildHeader();
         buildStatusCard();
         buildCookieCard();
+        buildForceLaunchCard();
         buildProbeCard();
         buildTogglesCard();
         buildHelpCard();
@@ -508,6 +557,52 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         alp.topMargin = dp(10);
         body.addView(actionStatus, alp);
+    }
+
+    private void buildForceLaunchCard() {
+        LinearLayout body = sectionCard("\u2461.5 \u5f3a\u5236\u542f\u52a8\u4e8c\u6b21\u589e\u5f3a\uff08\u6392\u969c\uff09");
+
+        TextView hint = text("\u76f8\u518c\u5165\u53e3\u672a\u663e\u793a\u65f6\uff0c\u7528\u8fd9\u91cc\u76f4\u63a5\u6253\u5f00\u5f95\u5361\u4e00\u77ac\u5904\u7406\u9875\uff1b"
+                + "\u8bf7\u9009\u4e00\u5f20\u521a\u62cd\u3001\u672a\u7f16\u8f91\u7684\u4e00\u77ac\u7167\u7247\uff0c\u8fdb\u5165\u540e\u70b9\u300c\u5f00\u59cb\u5904\u7406\u300d\u3002", 12, colorTextDim, false);
+        body.addView(hint);
+
+        LinearLayout row1 = buttonRow(body);
+        addRowButton(row1, "\u9009\u62e9\u7167\u7247\u5e76\u542f\u52a8", "\u9009\u62e9\u4e00\u5f20\u7167\u7247\u5e76\u6253\u5f00\u5f95\u5361\u4e00\u77ac\u5904\u7406\u9875", true,
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        onPickPhotoClick();
+                    }
+                });
+        addRowButton(row1, "\u7528\u76f8\u518c\u6700\u65b0\u7167\u7247\u542f\u52a8", "\u8bfb\u53d6\u76f8\u518c\u6700\u65b0\u7167\u7247\u5e76\u542f\u52a8", false,
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        onLatestPhotoClick();
+                    }
+                });
+
+        LinearLayout row2 = buttonRow(body);
+        addRowButton(row2, "\u590d\u5236 adb \u542f\u52a8\u547d\u4ee4", "\u590d\u5236 am start \u547d\u4ee4\u7528\u4e8e\u624b\u52a8\u6392\u969c", true,
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        onCopyAdbCommandClick();
+                    }
+                });
+
+        forceLaunchStatus = text("", 11, colorTextDim, false);
+        forceLaunchStatus.setTextIsSelectable(true);
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        flp.topMargin = dp(8);
+        body.addView(forceLaunchStatus, flp);
+
+        TextView usage = text("\u4f7f\u7528\uff1a\u2460 \u62cd\u4e00\u5f20\u6b63\u5e38\u4eae\u5ea6\u3001\u672a\u7f16\u8f91\u7684\u5f95\u5361\u4e00\u77ac\u7167\u7247\uff1b"
+                + "\u2461 \u5728\u6a21\u5757\u91cc\u9009\u62e9\u7167\u7247\u542f\u52a8\uff1b\u2462 \u5728\u624b\u673a\u4e0a\u70b9\u300c\u5f00\u59cb\u5904\u7406\u300d\uff1b"
+                + "\u2463 \u56de\u672c\u9875\u70b9\u300c\u5237\u65b0\u4e91\u7aef\u8f68\u8ff9\u300d\u5e76\u300c\u590d\u5236\u8bca\u65ad\u4fe1\u606f\u300d\u3002", 11, colorTextDim, false);
+        usage.setPadding(0, dp(6), 0, 0);
+        body.addView(usage);
     }
 
     private void buildProbeCard() {
@@ -850,6 +945,188 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             setActionStatus("\u6e05\u7a7a\u5931\u8d25\uff1a" + t);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Forced LegendaryActivity launcher (bypass missing gallery entry)
+    // ------------------------------------------------------------------
+
+    private void onPickPhotoClick() {
+        try {
+            Intent intent = new Intent(ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("image/*");
+            startActivityForResult(intent, REQ_PICK_IMAGE);
+            setForceLaunchStatus("\u8bf7\u9009\u62e9\u4e00\u5f20\u521a\u62cd\u3001\u672a\u7f16\u8f91\u7684\u5f95\u5361\u4e00\u77ac\u7167\u7247\u2026");
+        } catch (Throwable t) {
+            setForceLaunchStatus("\u6253\u5f00\u76f8\u518c\u9009\u62e9\u5668\u5931\u8d25\uff1a" + t
+                    + "\n\u53ef\u7528\u300c\u590d\u5236 adb \u542f\u52a8\u547d\u4ee4\u300d\u624b\u52a8\u6392\u969c\u3002");
+        }
+    }
+
+    private void onLatestPhotoClick() {
+        String permission = mediaPermission();
+        if (!hasPermission(permission)) {
+            try {
+                requestPermissions(new String[]{permission}, REQ_PERM_MEDIA);
+                setForceLaunchStatus("\u6b63\u5728\u8bf7\u6c42\u8bfb\u53d6\u7167\u7247\u6743\u9650\uff08" + permission
+                        + "\uff09\uff0c\u6388\u6743\u540e\u5c06\u81ea\u52a8\u7528\u76f8\u518c\u6700\u65b0\u7167\u7247\u542f\u52a8\u3002");
+            } catch (Throwable t) {
+                setForceLaunchStatus("\u8bf7\u6c42\u6743\u9650\u5931\u8d25\uff1a" + t);
+            }
+            return;
+        }
+        queryLatestPhotoAndLaunch();
+    }
+
+    private String mediaPermission() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return Manifest.permission.READ_MEDIA_IMAGES;
+        }
+        return Manifest.permission.READ_EXTERNAL_STORAGE;
+    }
+
+    private boolean hasPermission(String permission) {
+        try {
+            return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_PERM_MEDIA) {
+            return;
+        }
+        boolean granted = grantResults != null && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        if (granted) {
+            queryLatestPhotoAndLaunch();
+        } else {
+            setForceLaunchStatus("\u672a\u6388\u4e88\u8bfb\u53d6\u7167\u7247\u6743\u9650\uff1a\u53ef\u6539\u7528\u300c\u9009\u62e9\u7167\u7247\u5e76\u542f\u52a8\u300d"
+                    + "\uff08\u7cfb\u7edf\u6587\u4ef6\u9009\u62e9\u5668\u4e0d\u9700\u8981\u6b64\u6743\u9650\uff09\u3002");
+        }
+    }
+
+    /** Queries the newest MediaStore image off the UI thread, then launches LegendaryActivity. */
+    private void queryLatestPhotoAndLaunch() {
+        setForceLaunchStatus("\u6b63\u5728\u67e5\u8be2\u76f8\u518c\u6700\u65b0\u7167\u7247\u2026");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Uri uri = null;
+                String name = null;
+                Cursor cursor = null;
+                try {
+                    String[] projection = new String[]{
+                            MediaStore.Images.Media._ID,
+                            MediaStore.Images.Media.DISPLAY_NAME
+                    };
+                    String sort = MediaStore.Images.Media.DATE_ADDED + " DESC";
+                    cursor = getContentResolver().query(
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            projection, null, null, sort);
+                    if (cursor != null && cursor.moveToFirst()) {
+                        long id = cursor.getLong(0);
+                        try {
+                            name = cursor.getString(1);
+                        } catch (Throwable ignored) {
+                        }
+                        uri = ContentUris.withAppendedId(
+                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+                    }
+                } catch (Throwable t) {
+                    Log.w(TAG, "MediaStore query failed: " + t);
+                } finally {
+                    if (cursor != null) {
+                        try {
+                            cursor.close();
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+                final Uri foundUri = uri;
+                final String foundName = name;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (foundUri == null) {
+                            setForceLaunchStatus("\u672a\u5728\u76f8\u518c\u4e2d\u627e\u5230\u7167\u7247\uff1a\u8bf7\u5148\u62cd\u4e00\u5f20\u7167\u7247\uff0c"
+                                    + "\u6216\u7528\u300c\u9009\u62e9\u7167\u7247\u5e76\u542f\u52a8\u300d\u3002");
+                            return;
+                        }
+                        launchLegendaryActivity(foundUri, foundName);
+                    }
+                });
+            }
+        }, "latest-photo-query").start();
+    }
+
+    /** Launches the exported LegendaryActivity with the image Uri, trying fallback component names. */
+    private void launchLegendaryActivity(Uri uri, String displayName) {
+        if (uri == null) {
+            setForceLaunchStatus("\u7167\u7247 Uri \u4e3a\u7a7a\uff0c\u65e0\u6cd5\u542f\u52a8\u3002");
+            return;
+        }
+        String lastError = "";
+        for (int i = 0; i < LEGENDARY_COMPONENT_VARIANTS.length; i++) {
+            String comp = LEGENDARY_COMPONENT_VARIANTS[i];
+            try {
+                ComponentName cn = ComponentName.unflattenFromString(comp);
+                if (cn == null) {
+                    continue;
+                }
+                Intent intent = new Intent();
+                intent.setComponent(cn);
+                intent.setData(uri);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(intent);
+                lastPickedUri = uri.toString();
+                lastLaunchComponent = comp;
+                String scheme = uri.getScheme() == null ? "?" : uri.getScheme();
+                setForceLaunchStatus("\u5df2\u542f\u52a8\uff1a" + comp
+                        + "\nuri scheme=" + scheme
+                        + (displayName == null || displayName.isEmpty() ? "" : "\uff08" + displayName + "\uff09")
+                        + "\n\u8bf7\u5728\u5f95\u5361\u4e00\u77ac\u9875\u70b9\u300c\u5f00\u59cb\u5904\u7406\u300d\uff0c"
+                        + "\u7136\u540e\u56de\u672c\u9875\u70b9\u300c\u5237\u65b0\u4e91\u7aef\u8f68\u8ff9\u300d\u3002");
+                return;
+            } catch (ActivityNotFoundException e) {
+                lastError = "ActivityNotFound: " + comp;
+            } catch (SecurityException e) {
+                lastError = "SecurityException: " + comp;
+            } catch (Throwable t) {
+                lastError = comp + " -> " + t;
+            }
+        }
+        setForceLaunchStatus("\u542f\u52a8\u5f95\u5361\u4e00\u77ac\u9875\u5931\u8d25\uff08\u5df2\u5c1d\u8bd5\u591a\u4e2a\u7ec4\u4ef6\uff09\uff1a" + lastError
+                + "\n\u53ef\u70b9\u300c\u590d\u5236 adb \u542f\u52a8\u547d\u4ee4\u300d\uff0c\u5728 adb shell \u4e2d\u624b\u52a8\u6267\u884c\u3002");
+    }
+
+    private void onCopyAdbCommandClick() {
+        try {
+            String uri = lastPickedUri;
+            if (uri == null || uri.isEmpty()) {
+                uri = "content://media/external/images/media/<id>";
+            }
+            String command = "am start -n " + LEGENDARY_COMPONENT_VARIANTS[0]
+                    + " -d " + uri + " --grant-read-uri-permission";
+            String full = "adb shell " + command;
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("adb command", full));
+            setForceLaunchStatus("\u5df2\u590d\u5236 adb \u547d\u4ee4\uff1a\n" + full
+                    + "\n\n\uff08\u5982\u9700\u5b9e\u9645 Uri\uff0c\u8bf7\u5148\u7528\u4e0a\u9762\u4e24\u4e2a\u6309\u94ae\u9009\u62e9/\u8bfb\u53d6\u7167\u7247\uff09");
+        } catch (Throwable t) {
+            setForceLaunchStatus("\u590d\u5236 adb \u547d\u4ee4\u5931\u8d25\uff1a" + t);
+        }
+    }
+
+    private void setForceLaunchStatus(String textValue) {
+        if (forceLaunchStatus != null) {
+            forceLaunchStatus.setText(textValue == null ? "" : textValue);
+        }
+        Log.i(TAG, "force-launch: " + (textValue == null ? "" : textValue));
     }
 
     private void onToggleHelpClick() {
@@ -1810,6 +2087,14 @@ public class MainActivity extends Activity {
                 + "\u754c\u9762\u4f1a\u663e\u793a\u6765\u6e90\u57df\u540d\u4e0e\u8de8\u57df\u91cd\u590d\u952e\u63d0\u793a\uff08\u4ec5\u952e\u540d\uff09\u3002\n");
         sb.append("\u00b7 \u300c\u590d\u5236\u8bca\u65ad\u4fe1\u606f\u300d\u53ea\u590d\u5236\u7248\u672c\u3001HTTP \u7801\u3001UA \u7c7b\u578b\u3001\u81ea\u68c0\u72b6\u6001\u3001"
                 + "Cookie \u952e\u540d\u4e0e\u957f\u5ea6\u3001\u6765\u6e90\u57df\u540d\uff0c\u4e0d\u5305\u542b\u4efb\u4f55\u4ee4\u724c\u503c\u3002\n\n");
+        sb.append("\u3010\u5f3a\u5236\u542f\u52a8\u4e8c\u6b21\u589e\u5f3a\uff08\u6392\u969c\uff09\u3011\n");
+        sb.append("\u00b7 \u76f8\u518c\u91cc\u6ca1\u6709\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\u5165\u53e3\u65f6\uff0c\u53ef\u5728\u6a21\u5757\u7684\u300c\u2461.5 \u5f3a\u5236\u542f\u52a8\u4e8c\u6b21\u589e\u5f3a\uff08\u6392\u969c\uff09\u300d\u5361\u7247\u91cc"
+                + "\u76f4\u63a5\u6253\u5f00\u5f95\u5361\u4e00\u77ac\u5904\u7406\u9875\uff08com.miui.mediaeditor.legendary.LegendaryActivity\uff09\u3002\n");
+        sb.append("\u00b7 \u6b65\u9aa4\uff1a\u2460 \u62cd\u4e00\u5f20\u6b63\u5e38\u4eae\u5ea6\u3001\u672a\u7f16\u8f91\u7684\u5f95\u5361\u4e00\u77ac\u7167\u7247\uff1b\u2461 \u5728\u6a21\u5757\u91cc\u70b9\u300c\u9009\u62e9\u7167\u7247\u5e76\u542f\u52a8\u300d"
+                + "\u6216\u300c\u7528\u76f8\u518c\u6700\u65b0\u7167\u7247\u542f\u52a8\u300d\uff1b\u2462 \u5728\u624b\u673a\u4e0a\u70b9\u300c\u5f00\u59cb\u5904\u7406\u300d\uff1b"
+                + "\u2463 \u56de\u672c\u9875\u70b9\u300c\u5237\u65b0\u4e91\u7aef\u8f69\u8ff9\u300d\u5e76\u590d\u5236\u8bca\u65ad\u3002\n");
+        sb.append("\u00b7 \u82e5\u542f\u52a8\u5931\u8d25\uff0c\u53ef\u590d\u5236 adb \u547d\u4ee4\uff08am start -n \u7ec4\u4ef6 -d <uri> --grant-read-uri-permission\uff09"
+                + "\u5728 adb shell \u4e2d\u624b\u52a8\u6267\u884c\uff1b\u6a21\u5757\u4e0d\u4f1a\u4fee\u6539\u4efb\u4f55\u7cfb\u7edf\u5c5e\u6027\u3002\n");
         sb.append("\u3010\u5b89\u5168\u4e0e\u9690\u79c1\u3011\n");
         sb.append("\u00b7 Cookie \u4ec5\u4fdd\u5b58\u5728\u672c\u673a\u6a21\u5757\u79c1\u6709\u5b58\u50a8\uff1b\u6a21\u5757\u4e0d\u4e0a\u4f20\u3001\u4e0d\u8bb0\u5f55\u4ee4\u724c\u503c"
                 + "\uff08\u754c\u9762\u4ec5\u663e\u793a\u952e\u540d/\u957f\u5ea6\uff0c\u4f53\u68c0\u7ed3\u679c\u5df2\u8131\u654f\uff09\u3002\u8bf7\u4e0d\u8981\u5c06 Cookie \u5206\u4eab\u7ed9\u4ed6\u4eba\u3002\n\n");
