@@ -1,10 +1,15 @@
-# LSPosed 模块 v2.4.3：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
+# LSPosed 模块 v2.5.0：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
 
 > 交付物：`out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.1.0.apk`（源：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.1.0.apk`；legacy Xposed 模块，LSPosed 可用）
-> 版本：`versionCode 13 / versionName 2.4.3`，53,860 B，sha256 `c7d70c3015119421dec5cf8ed40b0d655206f6ec64b8d7263e6e06e43b609337`（两次构建字节一致）
+> 版本：`versionCode 14 / versionName 2.5.0`，57,956 B，sha256 `f1dd7b76c918cdabad7632567433da51aa232cf9fa385126989bba531d435691`（两次构建字节一致）
 > 目标：小米 17 Ultra（`nezha` / `nezha_global`），HyperOS 4 / Android 17；`com.miui.mediaeditor`（相册-编辑）、可选 `com.android.camera`（配 Magisk CameraOnly）、`com.miui.gallery`（占位）
 >
 > ✅ **本版本完全不伪装系统属性**：不做 `resetprop`、不 hook `android.os.SystemProperties`、不修改任何 `ro.*` 值。改为**直接 hook App 内部的门禁判定方法**返回 `true`（只影响被 hook 的两个进程）。仍为静态分析产物，**未真机运行验证**。
+
+> **v2.5.0 新增（强制启动二次增强）**：真机上相册的「二次增强」入口不显示，而已确认 mediaeditor 的 `LegendaryActivity` 为 `exported=true` 且从 `Intent.data` 取图片 Uri、自动进入二次增强流程。模块 App 新增「②.5 强制启动二次增强（排障）」卡片：
+> ① 「选择照片并启动」（`ACTION_OPEN_DOCUMENT` 选图 → 显式 Intent 启动 `com.miui.mediaeditor/com.miui.mediaeditor.legendary.LegendaryActivity` + `FLAG_GRANT_READ_URI_PERMISSION`，失败自动回退组件名变体）；
+> ② 「用相册最新照片启动」（运行时申请 `READ_MEDIA_IMAGES`/旧版存储权限 → MediaStore 查最新图片 → 同样的显式启动）；
+> ③ 「复制 adb 启动命令」（`am start -n ... -d <uri> --grant-read-uri-permission`，作为 ROM 限制 exported 启动时的兜底）。配合 v2.4.3 的「云端请求轨迹」即可直接看到 `legendV2/create` 的真实 HTTP 结果。
 
 > **v2.4.3 新增（设备端云端请求轨迹）**：沙箱出口为新加坡机房 IP，被小米风控拦截（同一 Cookie 在用户设备 micloud 200，在沙箱 STS/micloud 均 401），无法在开发环境"测到通过"。因此在 mediaeditor 的云请求拦截器（CN `nm.f` / GLOBAL `jq.g`）上增加 after-hook：记录 App **实际请求**的 `method + host + encodedPath`（不含 query/签名）、HTTP 状态码、是否带 Cookie（不记录任何值/体），环形缓冲最近 12 条，写日志并暴露到模块 Provider（`set_cloud_trace`/`get_cloud_trace`）；模块 UI 新增「云端请求轨迹（最近12条）」+「刷新云端轨迹」，并并入「复制诊断信息」。用于定位真实 AI 云基址与鉴权结果。
 
@@ -118,9 +123,9 @@
 
 ## 5. 验证状态（静态）
 
-- 可复现构建：两次构建 sha256 一致（`c7d70c30…9337`，53,860 B，vc=13/vn=2.4.3）。
+- 可复现构建：两次构建 sha256 一致（`f1dd7b76…5691`，57,956 B，vc=14/vn=2.5.0）。
 - 签名：apksigner `Verifies`，v1+v2+v3（`--min-sdk-version 21` 校验）。
-- APK：`classes.dex`（91,524 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=13/vn=2.4.3、minSdk 29/targetSdk 35、INTERNET；Manifest 含 `LoginActivity`(exported=false)；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- APK：`classes.dex`（100,704 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=14/vn=2.5.0、minSdk 29/targetSdk 35、INTERNET + READ_MEDIA_IMAGES(+旧版存储 maxSdk32)；Manifest 含 `LoginActivity`(exported=false)、`<queries>` mediaeditor；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
 - dex 中已无任何系统账号 Cookie 路径字样（系统账号捕获/填入捕获/cookie_mode/captured_cookie/hyperos_sec_common/登录系统小米账号/set_captured_cookie 均为 0）。
 - v2.2.1 新增：WebView 错误处理方法（`onReceivedHttpError`/`onReceivedError`）、`i.mi.com/sts` 一次性自动恢复逻辑、直接打开 `https://i.mi.com/` 的登录/STS 入口；dex 中**已无**旧的无效应答 URL（`pass/serviceLogin?sid=i.mi.com` 与 `sts%3Fsign%3Dx` 均为 0）。
 - 新增功能字符串已验证入 dex（检测 Cookie、serviceToken、3 个探测端点、Cookie 组成检查、2.2.0）；**未硬编码任何用户凭据**（源码与 dex 中均无粘贴过的 userId/cUserId/deviceId 字面量）；Cookie 值不写入日志/诊断文件。
@@ -133,7 +138,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.4.3.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（53,860 B，sha256 `c7d70c30…9337`） |
+| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.5.0.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（57,956 B，sha256 `f1dd7b76…5691`） |
 | `work/leica/lsposed/app/` | 模块源码（Java + manifest + xposed 元数据） |
 | `work/leica/lsposed/app/README_APP.md` | 用户指南（中文，含两条使用路径/排错） |
 | `work/leica/lsposed/build.sh` / `README_BUILD.md` | 无 Gradle 可复现构建 |
