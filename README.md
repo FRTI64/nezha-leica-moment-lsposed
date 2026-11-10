@@ -1,12 +1,12 @@
 # nezha-leica-moment-lsposed
 
-**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.4.1 —— 零属性伪装**
+**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.4.2 —— 零属性伪装**
 
 > ✅ 不 resetprop、不 hook `SystemProperties`、不修改任何 `ro.*` 属性：改为**直接 hook App 内部判定方法**返回 true（仅影响被 hook 进程）。
 > 同时保留小米账号 Cookie 登录/注入、未登录兜底；**v2.4.0 按用户要求彻底移除系统账号 Cookie 路径**（Cookie 来源仅限手动粘贴/全屏网页登录），并新增**网页会话自检**；v2.3.0 的全屏登录与 UA 自适应体检保留；v2.2.2 修复 Cookie 体检误报（真实鉴权信号端点 + UA 自适应）；v2.2.1 修复 STS 网页错误（`net::ERR_HTTP_RESPONSE_CODE_FAILURE`，旧版 sign=x 占位符问题）；v2.2.0 新增 **Cookie 体检（只读 GET 探测）**、**WebView STS 助手（补 serviceToken）** 与**卡片式新 UI**。CTA 不强制、不伪造硬件认证、不绕过服务端权益。
 
 - 目标：`com.miui.mediaeditor`（相册-编辑，国际版 2.10.40.4.8-global / 国行 2.10.43.0.6）；可选 `com.android.camera`（配 Magisk CameraOnly 提供国行 MiuiCamera 6.7 APK）。
-- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.4.1.apk`（49,764 B，sha256 `939f0343…e30c`，versionCode 11）。
+- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.4.2.apk`（49,764 B，sha256 `673b6231…2b25`，versionCode 12）。
 - 未真机验证；仅供个人设备本地研究与自用修改。
 
 ---
@@ -84,6 +84,13 @@ VERSION_CODE=5 VERSION_NAME=2.1.0 ./build.sh app dist/LeicaMoment_LSPosed_v2.1.0
 - apksigner `Verifies`（v1+v2+v3，`--min-sdk-version 21`）；`aapt2 dump badging` 正常；dex 内 0 个 `de.robv` 类定义。
 - dex 中**不存在** `ro.theme_customize`/`ro.miui.build.region`/`ro.theme_leica`/`ro.special_edition`/`SPOOF_PROPS`/`hookSystemProperties`/`resetprop`（零属性伪装证据）。
 - Hook 目标均有两版 smali 证据（`docs/`）。
+
+## 5.6 v2.4.2 更新：体检判定修正（micloud 200 = 鉴权通过）
+
+真机诊断显示：网页自检 200；micloud `type=1/2` 在 Web UA 下返回 **HTTP 200**（v2.4.1 的 Cookie 合并优先级修复已解决 401）。据此调整：
+- **任何 2xx 且无登录标识的 micloud 响应 = 绿色「鉴权通过」**；业务/缺参错误只附加备注，不再降级 WARN；
+- AI 云平台探测行改为**参考**（基址由远端 CloudConfig `AIConfig.url_config` 下发，写死 URL 可能 404）：404/405 判为「路径/基址不匹配（不代表 Cookie 无效）」且**不参与**鉴权结论；
+- 聚合：两条 micloud 均 2xx → 「Cookie 已被小米云鉴权接受 → 鉴权通过；请直接实测二次增强（能否出图取决于服务端权益/设备白名单/硬件认证 token）」；任一 micloud 401/403 → 红色被拒；纯网络问题 → 无法判定。
 
 ## 5.5 v2.4.1 更新：真实目标 AI 云平台探测 + Cookie 合并优先级修复
 
