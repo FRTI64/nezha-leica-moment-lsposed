@@ -29,8 +29,11 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *
  * <p>Also kept from v1.x:</p>
  * <ol>
- *   <li>Xiaomi STS cookie injection: {@code go.e.b()} (CN) / {@code bs.e.b()}
- *       (GLOBAL), including the static cookie-cache field "b" fix.</li>
+ *   <li>USER cookie injection: {@code go.e.b()} (CN) / {@code bs.e.b()} (GLOBAL),
+ *       including the static cookie-cache field "b" fix. Only a user-supplied
+ *       cookie (manual or exported from the module's own full-screen web login)
+ *       is used. The app's system-account STS cookie is NEVER read, stored or
+ *       reported; without a user cookie the original value passes through.</li>
  *   <li>AccountUtil login probe {@code ga0.e.a(Context)} /
  *       {@code be0.e.a(Context)} for devices without a system Xiaomi account.</li>
  *   <li>CTA is never forced - it is a normal user-consented privacy dialog and
@@ -131,7 +134,6 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static volatile Bundle sConfig;
     private static volatile long sConfigTs;
     private static volatile Context sAppContext;
-    private static volatile String sLastReportedCookie;
     private static volatile boolean sCookieInjectionLogged;
     private static volatile boolean sCookieCacheLogged;
     private static volatile boolean sCookieCacheWarned;
@@ -302,13 +304,6 @@ public class HookEntry implements IXposedHookLoadPackage {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         try {
-                            Object result = param.getResult();
-                            if (result instanceof String) {
-                                String original = (String) result;
-                                if (original != null && !original.trim().isEmpty()) {
-                                    reportCapturedCookie(original);
-                                }
-                            }
                             String cookie = userCookie();
                             if (!cookie.isEmpty()) {
                                 if (!sCookieInjectionLogged) {
@@ -521,8 +516,6 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static Bundle fetchConfig() {
         Bundle fallback = new Bundle();
         fallback.putString("cookie", "");
-        fallback.putString("captured_cookie", "");
-        fallback.putString("cookie_mode", ModuleConfig.MODE_AUTO);
         fallback.putBoolean("enable_gate_bypass", ModuleConfig.DEFAULT_ENABLE_GATE_BYPASS);
         fallback.putBoolean("enable_cookie", ModuleConfig.DEFAULT_ENABLE_COOKIE);
         fallback.putBoolean("force_cta", ModuleConfig.DEFAULT_FORCE_CTA);
@@ -559,11 +552,12 @@ public class HookEntry implements IXposedHookLoadPackage {
     }
 
     /**
-     * Returns the cookie to inject, using the same source precedence as the UI:
-     * manual mode -&gt; manual only; captured mode -&gt; system-account captured only;
-     * auto -&gt; manual if non-empty, otherwise the captured STS cookie (so a device
-     * with a logged-in system Xiaomi account gets automatic STS-cookie injection
-     * with zero user action).
+     * Returns the user-supplied cookie to inject (manual paste or the cookie
+     * exported by the module's own full-screen web login).
+     *
+     * <p>The app's system-account STS cookie is deliberately NOT used: when no
+     * user cookie is configured this returns an empty string and the original
+     * value is passed through untouched.</p>
      */
     private static String userCookie() {
         try {
@@ -571,49 +565,10 @@ public class HookEntry implements IXposedHookLoadPackage {
             if (!c.getBoolean("enable_cookie", ModuleConfig.DEFAULT_ENABLE_COOKIE)) {
                 return "";
             }
-            String mode = c.getString("cookie_mode", ModuleConfig.MODE_AUTO);
-            String manual = safeTrim(c.getString("cookie"));
-            String captured = safeTrim(c.getString("captured_cookie"));
-            if (ModuleConfig.MODE_CAPTURED.equals(mode)) {
-                return captured;
-            }
-            if (ModuleConfig.MODE_MANUAL.equals(mode)) {
-                return manual;
-            }
-            return manual.isEmpty() ? captured : manual;
+            String cookie = c.getString("cookie");
+            return cookie == null ? "" : cookie.trim();
         } catch (Throwable t) {
             return "";
-        }
-    }
-
-    private static String safeTrim(String value) {
-        return value == null ? "" : value.trim();
-    }
-
-    /** Reports the system-account cookie that the app itself fetched to the module UI. */
-    private static void reportCapturedCookie(String raw) {
-        if (raw == null) {
-            return;
-        }
-        String cookie = raw.trim();
-        if (cookie.isEmpty() || cookie.equals(sLastReportedCookie)) {
-            return;
-        }
-        try {
-            Context ctx = appContext();
-            if (ctx == null) {
-                return;
-            }
-            Bundle extras = new Bundle();
-            extras.putString("cookie", cookie);
-            Bundle result = ctx.getContentResolver().call(ModuleConfig.providerUri(),
-                    ModuleConfig.METHOD_SET_CAPTURED_COOKIE, null, extras);
-            sLastReportedCookie = cookie;
-            boolean ok = result != null && result.getBoolean("ok", false);
-            log("captured system-account cookie (" + cookie.length()
-                    + " chars) reported to module app, ok=" + ok);
-        } catch (Throwable t) {
-            log("captured cookie report failed: " + t);
         }
     }
 }
