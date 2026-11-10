@@ -37,6 +37,13 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *       props-only (no CTA input). Only a log line is emitted if requested.</li>
  * </ol>
  *
+ * <p>{@code com.miui.gallery} (HyperOS 4) is a Flutter + Rust app with no Java
+ * code of its own (Dart AOT {@code libapp.so} + Rust {@code libapp_gallery.so}
+ * via flutter_rust_bridge). Dart/Rust cannot be hooked from LSPosed, so for the
+ * gallery process the module installs only the SystemProperties spoof hooks as
+ * a safety net for the Java/JNI system-property bridge used by its Rust
+ * capability probes. Cookie/account hooks stay mediaeditor-only.</p>
+ *
  * <p>Every hook installation and every hook body is wrapped in try/catch so a
  * version mismatch can never crash the target app.</p>
  */
@@ -102,8 +109,13 @@ public class HookEntry implements IXposedHookLoadPackage {
         try {
             log("handleLoadPackage: pkg=" + pkg + " process=" + lpparam.processName);
             if (!PKG_EDITOR.equals(pkg)) {
-                // Flutter gallery keeps its own capability cache; nothing safe to hook for now.
-                log("gallery scope loaded - no method hooks installed by design");
+                // com.miui.gallery is Flutter + Rust (HyperOS 4): Dart AOT libapp.so +
+                // Rust libapp_gallery.so (flutter_rust_bridge). Dart/Rust cannot be hooked
+                // from LSPosed, but gallery's Java/JNI SystemPropertyMethodChannel bridge
+                // still reads android.os.SystemProperties, and its Rust capability probe
+                // calls the mediaeditor provider. Install the props spoof as a safety net.
+                hookSystemProperties(lpparam);
+                log("gallery scope: SystemProperties spoof hooks installed (Rust bridge safety net)");
                 return;
             }
             hookSystemProperties(lpparam);
