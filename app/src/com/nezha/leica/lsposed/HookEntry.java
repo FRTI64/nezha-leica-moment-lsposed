@@ -522,6 +522,7 @@ public class HookEntry implements IXposedHookLoadPackage {
         Bundle fallback = new Bundle();
         fallback.putString("cookie", "");
         fallback.putString("captured_cookie", "");
+        fallback.putString("cookie_mode", ModuleConfig.MODE_AUTO);
         fallback.putBoolean("enable_gate_bypass", ModuleConfig.DEFAULT_ENABLE_GATE_BYPASS);
         fallback.putBoolean("enable_cookie", ModuleConfig.DEFAULT_ENABLE_COOKIE);
         fallback.putBoolean("force_cta", ModuleConfig.DEFAULT_FORCE_CTA);
@@ -557,17 +558,36 @@ public class HookEntry implements IXposedHookLoadPackage {
         return cached;
     }
 
+    /**
+     * Returns the cookie to inject, using the same source precedence as the UI:
+     * manual mode -&gt; manual only; captured mode -&gt; system-account captured only;
+     * auto -&gt; manual if non-empty, otherwise the captured STS cookie (so a device
+     * with a logged-in system Xiaomi account gets automatic STS-cookie injection
+     * with zero user action).
+     */
     private static String userCookie() {
         try {
             Bundle c = config();
             if (!c.getBoolean("enable_cookie", ModuleConfig.DEFAULT_ENABLE_COOKIE)) {
                 return "";
             }
-            String cookie = c.getString("cookie");
-            return cookie == null ? "" : cookie.trim();
+            String mode = c.getString("cookie_mode", ModuleConfig.MODE_AUTO);
+            String manual = safeTrim(c.getString("cookie"));
+            String captured = safeTrim(c.getString("captured_cookie"));
+            if (ModuleConfig.MODE_CAPTURED.equals(mode)) {
+                return captured;
+            }
+            if (ModuleConfig.MODE_MANUAL.equals(mode)) {
+                return manual;
+            }
+            return manual.isEmpty() ? captured : manual;
         } catch (Throwable t) {
             return "";
         }
+    }
+
+    private static String safeTrim(String value) {
+        return value == null ? "" : value.trim();
     }
 
     /** Reports the system-account cookie that the app itself fetched to the module UI. */
