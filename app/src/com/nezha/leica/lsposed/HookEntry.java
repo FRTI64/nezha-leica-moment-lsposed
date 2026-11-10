@@ -4,6 +4,13 @@ import android.content.Context;
 import android.os.Bundle;
 
 import android.app.AndroidAppHelper;
+
+import java.lang.reflect.Method;
+import java.net.URI;
+import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
+import java.util.Date;
+import java.util.Locale;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -131,6 +138,24 @@ public class HookEntry implements IXposedHookLoadPackage {
             + "\ubf99\ubf93\ubf95\ubfde\ubfbe\ubf95\ubf8a\ubf98\ubf91";
     private static final String CAMERA_FALLBACK_METHOD = "h5";
 
+    /** Interceptor trace targets: {class, method}. CN Lnm/f; GLOBAL Ljq/g; interceptor. */
+    private static final String[][] CLOUD_TRACE_TARGETS = new String[][]{
+            {"nm.f", "a"},  // CN mediaeditor 2.10.43.0.6 cookie/cloud OkHttp interceptor
+            {"jq.g", "a"}   // GLOBAL mediaeditor 2.10.40.4.8-global interceptor
+    };
+
+    /**
+     * Trace only cloud/AI related paths. Recorded fields: method, host, encodedPath
+     * (NO query/signature), HTTP code, cookie-header-present flag. NEVER header
+     * values, query params, bodies, tokens or signatures.
+     */
+    private static final String[] CLOUD_TRACE_PATH_FILTERS = new String[]{
+            "aiphotocloud", "legend", "hardwareauth", "hardwarenonce", "auth/v1", "billing"
+    };
+    private static final int CLOUD_TRACE_MAX = 12;
+    private static final ArrayDeque<String> sCloudTrace = new ArrayDeque<String>();
+    private static volatile String sCloudTraceJoined = "";
+
     private static volatile Bundle sConfig;
     private static volatile long sConfigTs;
     private static volatile Context sAppContext;
@@ -168,6 +193,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             }
             hookGatePredicates(lpparam);
             hookCookieProviders(lpparam);
+            hookCloudTrace(lpparam);
             hookAccountProbe(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
@@ -351,6 +377,338 @@ public class HookEntry implements IXposedHookLoadPackage {
             log("force_cta disabled (default) - CTA is a normal privacy dialog, "
                     + "accept it manually in the app");
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // (1c) On-device cloud-request trace (compact, no tokens/query/body)
+    // ---------------------------------------------------------------------
+
+    private static void hookCloudTrace(XC_LoadPackage.LoadPackageParam lpparam) {
+        int installed = 0;
+        for (int i = 0; i < CLOUD_TRACE_TARGETS.length; i++) {
+            final String className = CLOUD_TRACE_TARGETS[i][0];
+            final String methodName = CLOUD_TRACE_TARGETS[i][1];
+            try {
+                Class<?> cls = XposedHelpers.findClass(className, lpparam.classLoader);
+                Method[] methods = cls.getDeclaredMethods();
+                boolean hookedOne = false;
+                for (int j = 0; j < methods.length; j++) {
+                    final Method m = methods[j];
+                    if (!m.getName().equals(methodName)) {
+                        continue;
+                    }
+                    if (m.getParameterTypes().length != 1) {
+                        continue;
+                    }
+                    try {
+                        XposedBridge.hookMethod(m, new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                try {
+                                    Object response = param.getResult();
+                                    Object chain = param.args.length > 0 ? param.args[0] : null;
+                                    String url = findUrlInObject(chain);
+                                    if (url == null) {
+                                        return;
+                                    }
+                                    String host = null;
+                                    String path = null;
+                                    try {
+                                        URI uri = URI.create(url);
+                                        host = uri.getHost();
+                                        path = uri.getRawPath();
+                                    } catch (Throwable ignored) {
+                                    }
+                                    if (host == null || path == null) {
+                                        return;
+                                    }
+                                    String lowerHost = host.toLowerCase(Locale.US);
+                                    if (!lowerHost.contains("xiaomi") && !lowerHost.contains("mi.com")) {
+                                        return;
+                                    }
+                                    String lowerPath = path.toLowerCase(Locale.US);
+                                    boolean worthy = false;
+                                    for (int k = 0; k < CLOUD_TRACE_PATH_FILTERS.length; k++) {
+                                        if (lowerPath.contains(CLOUD_TRACE_PATH_FILTERS[k])) {
+                                            worthy = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!worthy) {
+                                        return;
+                                    }
+                                    String httpMethod = findHttpMethodInObject(chain, 2);
+                                    if (httpMethod == null) {
+                                        httpMethod = "?";
+                                    }
+                                    int code = extractHttpCode(response);
+                                    boolean cookiePresent = hasCookieHeaderInObject(chain, 2);
+                                    String ts;
+                                    try {
+                                        ts = new SimpleDateFormat("HH:mm:ss", Locale.US)
+                                                .format(new Date());
+                                    } catch (Throwable t) {
+                                        ts = "?";
+                                    }
+                                    recordCloudTrace(ts + " " + httpMethod + " " + host + path
+                                            + " -> " + (code > 0 ? String.valueOf(code) : "?")
+                                            + " cookie=" + (cookiePresent ? "1" : "0"));
+                                } catch (Throwable t) {
+                                    // never disturb the network path
+                                }
+                            }
+                        });
+                        hookedOne = true;
+                        installed++;
+                        log("cloud trace hook installed: " + className + "." + m.getName()
+                                + "(" + m.getParameterTypes()[0].getSimpleName() + ")");
+                    } catch (Throwable t) {
+                        log("cloud trace hookMethod failed: " + className + "." + methodName + " -> " + t);
+                    }
+                }
+                if (!hookedOne) {
+                    log("cloud trace target has no matching method: " + className + "." + methodName);
+                }
+            } catch (Throwable t) {
+                log("cloud trace class not present (normal on other app versions): "
+                        + className + "." + methodName + " -> " + t);
+            }
+        }
+        if (installed == 0) {
+            log("WARN: no cloud trace interceptor hook installed; request trace unavailable");
+        }
+    }
+
+    private static void recordCloudTrace(String line) {
+        String joined;
+        synchronized (sCloudTrace) {
+            sCloudTrace.addLast(line);
+            while (sCloudTrace.size() > CLOUD_TRACE_MAX) {
+                sCloudTrace.removeFirst();
+            }
+            StringBuilder sb = new StringBuilder();
+            for (String l : sCloudTrace) {
+                if (sb.length() > 0) {
+                    sb.append('\n');
+                }
+                sb.append(l);
+            }
+            joined = sb.toString();
+            sCloudTraceJoined = joined;
+        }
+        log("cloud_trace " + line);
+        try {
+            Context ctx = appContext();
+            if (ctx == null) {
+                return;
+            }
+            Bundle extras = new Bundle();
+            extras.putString("trace", joined);
+            ctx.getContentResolver().call(ModuleConfig.providerUri(),
+                    ModuleConfig.METHOD_SET_CLOUD_TRACE, null, extras);
+        } catch (Throwable t) {
+            log("cloud_trace persist failed: " + t);
+        }
+    }
+
+    /** Finds a URL-looking string in the object graph (depth-limited, reflection only). */
+    private static String findUrlInObject(Object root) {
+        if (root == null) {
+            return null;
+        }
+        String self = safeToString(root);
+        if (isUrlLike(self)) {
+            return extractUrl(self);
+        }
+        Class<?> cls = root.getClass();
+        Method[] methods = cls.getMethods();
+        for (int i = 0; i < methods.length; i++) {
+            Method m = methods[i];
+            if (m.getParameterTypes().length != 0) {
+                continue;
+            }
+            if (m.getDeclaringClass() == Object.class) {
+                continue;
+            }
+            try {
+                Object result = m.invoke(root);
+                if (result == null || result == root) {
+                    continue;
+                }
+                String rs = safeToString(result);
+                if (isUrlLike(rs)) {
+                    return extractUrl(rs);
+                }
+                if (!(result instanceof String)) {
+                    Method[] inner = result.getClass().getMethods();
+                    for (int j = 0; j < inner.length; j++) {
+                        Method im = inner[j];
+                        if (im.getParameterTypes().length != 0
+                                || im.getDeclaringClass() == Object.class) {
+                            continue;
+                        }
+                        try {
+                            Object ir = im.invoke(result);
+                            String irs = safeToString(ir);
+                            if (isUrlLike(irs)) {
+                                return extractUrl(irs);
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static String safeToString(Object o) {
+        if (o == null) {
+            return null;
+        }
+        try {
+            return String.valueOf(o);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static boolean isUrlLike(String s) {
+        if (s == null || s.length() > 4096) {
+            return false;
+        }
+        return s.contains("http://") || s.contains("https://");
+    }
+
+    private static String extractUrl(String s) {
+        int idx = s.indexOf("http://");
+        int httpsIdx = s.indexOf("https://");
+        if (idx < 0 || (httpsIdx >= 0 && httpsIdx < idx)) {
+            idx = httpsIdx;
+        }
+        if (idx < 0) {
+            return null;
+        }
+        int end = idx;
+        while (end < s.length()) {
+            char c = s.charAt(end);
+            if (c == ' ' || c == '"' || c == '\'' || c == ')' || c == '}' || c == ',' || c == '\n'
+                    || c == '\r' || c == '\t') {
+                break;
+            }
+            end++;
+        }
+        if (end <= idx + 8) {
+            return null;
+        }
+        String url = s.substring(idx, end);
+        return url.length() > 2048 ? url.substring(0, 2048) : url;
+    }
+
+    /** Finds an HTTP method string (GET/POST/...) in the request object graph. */
+    private static String findHttpMethodInObject(Object root, int depth) {
+        if (root == null || depth < 0) {
+            return null;
+        }
+        Method[] methods = root.getClass().getMethods();
+        for (int i = 0; i < methods.length; i++) {
+            Method m = methods[i];
+            if (m.getParameterTypes().length != 0
+                    || m.getDeclaringClass() == Object.class) {
+                continue;
+            }
+            try {
+                Object r = m.invoke(root);
+                if (!(r instanceof String)) {
+                    continue;
+                }
+                String v = ((String) r).trim();
+                if (v.equals("GET") || v.equals("POST") || v.equals("PUT")
+                        || v.equals("DELETE") || v.equals("PATCH") || v.equals("HEAD")
+                        || v.equals("OPTIONS")) {
+                    return v;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        for (int i = 0; i < methods.length; i++) {
+            Method m = methods[i];
+            if (m.getParameterTypes().length != 0
+                    || m.getDeclaringClass() == Object.class) {
+                continue;
+            }
+            try {
+                Object r = m.invoke(root);
+                if (r != null && r != root && !(r instanceof String)) {
+                    String nested = findHttpMethodInObject(r, depth - 1);
+                    if (nested != null) {
+                        return nested;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    /** Extracts the HTTP status code from an OkHttp-like response object. */
+    private static int extractHttpCode(Object response) {
+        if (response == null) {
+            return -1;
+        }
+        Method[] methods = response.getClass().getMethods();
+        for (int i = 0; i < methods.length; i++) {
+            Method m = methods[i];
+            if (m.getParameterTypes().length != 0
+                    || m.getDeclaringClass() == Object.class) {
+                continue;
+            }
+            Class<?> rt = m.getReturnType();
+            if (rt != int.class && rt != Integer.class) {
+                continue;
+            }
+            try {
+                Object r = m.invoke(response);
+                if (r instanceof Integer) {
+                    int v = ((Integer) r).intValue();
+                    if (v >= 100 && v <= 599) {
+                        return v;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return -1;
+    }
+
+    /** True when the request object graph contains a Cookie header (value never stored). */
+    private static boolean hasCookieHeaderInObject(Object root, int depth) {
+        if (root == null || depth < 0) {
+            return false;
+        }
+        Method[] methods = root.getClass().getMethods();
+        for (int i = 0; i < methods.length; i++) {
+            Method m = methods[i];
+            if (m.getParameterTypes().length != 0
+                    || m.getDeclaringClass() == Object.class) {
+                continue;
+            }
+            try {
+                Object r = m.invoke(root);
+                String rs = safeToString(r);
+                if (rs != null && rs.contains("Cookie")) {
+                    return true;
+                }
+                if (r != null && !(r instanceof String) && depth > 0) {
+                    if (hasCookieHeaderInObject(r, depth - 1)) {
+                        return true;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------------
