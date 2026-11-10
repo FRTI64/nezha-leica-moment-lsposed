@@ -10,13 +10,15 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.4.0.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 10 / versionName 2.4.0，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.3.0）已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.4.1.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 11 / versionName 2.4.1，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.4.0）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
    v2.4.0 重点：**彻底移除系统账号 Cookie 路径**（不读取/不捕获/不保存系统账号 STS Cookie）；
-   Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）
-   用于判断网页登录状态；Cookie 体检增加 `Referer`/`Accept-Language` 与 UA 适配（见第 5、7 节）。
+   Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）。
+   v2.4.1 新增：**真实目标 API 只读探测**（`api.open.ai.xiaomi.com/aiPhotoCloud/api/legendV2/list`，
+   POST body `{}`，不创建任务/不收费）+ AI 平台桌面 Chrome UA 重试 + **复制诊断信息** +
+   Cookie 合并按域名优先级去重（i.mi.com > api.open.ai.xiaomi.com > gallery.i.mi.com > account.xiaomi.com > xiaomi.com）。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -142,8 +144,10 @@ HyperOS 4 引入了大量 Rust 组件：
 - 全屏 WebView + 顶部「返回 / 刷新 / 自检 / 完成」、进度条、错误浮层；默认打开 `https://i.mi.com/`
   （未登录会自动走 passport 登录 → STS 链；不使用手工拼接的 sign=x URL）。
 - `i.mi.com/sts` 回调页若报 HTTP 错误，会自动回到 `i.mi.com` 重走一次登录流程（一次性自动恢复）。
-- 「完成」导出 Cookie 时合并 `account.xiaomi.com` / `i.mi.com` / `gallery.i.mi.com` /
-  `api.open.ai.xiaomi.com` / `xiaomi.com` 的 Cookie（按名字去重），只写入本机模块私有存储。
+- 「完成」导出 Cookie 时合并 5 个域名并按**域名优先级**去重（先出现者胜）：
+  `i.mi.com` > `api.open.ai.xiaomi.com` > `gallery.i.mi.com` > `account.xiaomi.com` > `xiaomi.com`。
+  这样云 API 域名的同名 Cookie 优先于 account/passport 域；若发现跨域重复键，会记录键名
+  （不记录值）并在组成检查中显示「来源域名 + 重复键」提示。
 - 若仍需 401，请确认网页内已完成登录/STS，或手动粘贴你确认有效的用户 Cookie。
 
 > **设备未登录系统小米账号时**：上传步骤会调用 AccountUtil 登录探针（CN `ga0.e.a(Context)` /
@@ -182,15 +186,25 @@ HyperOS 4 引入了大量 Rust 组件：
   - **Cookie 组成检查**：彩色标签显示 `passToken` / `serviceToken` / `cUserId` / `userId` /
     `deviceId` / `passInfo` / `uLocale` / `pass_ua` 等键是否存在（**只显示键名与长度，不显示令牌值**）；
     缺少 `serviceToken` 时显示醒目警告。
-- **③ Cookie 体检（只读探测）**：点「检测 Cookie 有效性」后，后台线程对
-  `i.mi.com/status/lite/setting?type=1|2` 发起 **GET 只读请求**（8 秒超时、不跟随重定向），
-  请求带 `Referer: https://i.mi.com/`、`Accept-Language: zh-CN,zh;q=0.9` 和 UA：
+- **③ Cookie 体检（只读探测）**：点「检测 Cookie 有效性」后，后台线程执行
+  **2 个 i.mi.com micloud GET**（`/status/lite/setting?type=1|2`）+ **1 个真实目标 API POST**
+  （`https://api.open.ai.xiaomi.com/aiPhotoCloud/api/legendV2/list`，body `{}`，只读 list，
+  **绝不调用 create/billing/收费接口**）。全部 8 秒超时、不跟随重定向，
+  请求带 `Referer: https://i.mi.com/`、`Accept-Language: zh-CN,zh;q=0.9` 和 UA（AI 平台行会额外用桌面 Chrome UA 重试）：
   - `pass_ua=web` 等网页 Cookie 优先使用 **Chrome-mobile UA**，否则先用 MiuiGallery UA；
   - 首次 HTTP 401 时用**另一种 UA 重试同一端点一次**，报告最佳结果并在结论中标注 UA；
   - 判定规则（沿用 v2.2.2 语义）：绿色=2xx 未要求重新登录；黄色=参数不足/网络问题/非登录重定向
     （不判定 Cookie 无效）；红色=401/403 或 2xx 响应含 `"R":401`/`serviceLogin`，或重定向到登录页；
+  - **AI 云平台行**（「AI 云平台（真实目标 API，只读 list）」）：401/403 或响应含 `"R":401`/`serviceLogin`
+    → 红色拒绝；2xx 无鉴权标识 → 绿色「AI 云平台未要求重新登录」；2xx 但缺参/业务错误 JSON 或其它 4xx
+    → 黄色「非鉴权问题」；网络错误 → 黄色。
+  - **聚合结论**：i.mi.com micloud 被拒绝但 AI 云平台为绿/黄 → 「实际二次增强可能仍可用（以实测为准）」；
+    i.mi.com 与 AI 云平台**都** 401 → 「网页 Cookie 不被小米云鉴权接受（服务端行为）；在不使用系统账号
+    Cookie 的前提下客户端无法修复」。若合并时存在跨域重复 Cookie 键，结论会提示可能与此有关。
   - 若上次由全屏登录页返回了网页会话自检结果：体检 401 且自检 200 时，结论会说明「网页 Cookie 与
     App 云 API 鉴权链路不同」；自检 401 时提示先完成网页登录/STS。
+  - 「**复制诊断信息**」：只复制版本、各探测端点的 HTTP 码/UA 类型、自检状态、Cookie 键名与长度、
+    来源域名与重复键信息；**不包含任何令牌值**，便于反馈排障。
 - **④ 功能开关**：门禁解锁（直接方法 Hook，不修改任何系统属性）、Cookie 注入（仅用户 Cookie）；
   CTA 开关为不可用状态（本模块有意不强制 CTA）。
 - **⑤ 使用说明与限制**：可折叠，内容与第 2~9 节一致。
@@ -274,7 +288,7 @@ HyperOS 4 引入了大量 Rust 组件：
 |---|---|
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
-| 体检显示网页 Cookie 被拒绝（HTTP 401） | 先在全屏登录页点「自检」：若自检也是 401，请完成网页登录/STS 后再点「完成」；若自检 200 而体检 401，说明网页 Cookie 不被 App 云 API 接受（鉴权链路差异，模块不使用系统账号 Cookie，无法绕过）。可尝试重新登录/更换账号或手动粘贴你确认有效的用户 Cookie。 |
+| 体检显示网页 Cookie 被拒绝（HTTP 401） | 先看**AI 云平台行**：若 i.mi.com 401 但 AI 云平台为绿/黄 → 实际二次增强可能仍可用（以实测为准）；若 AI 云平台也 401 → 网页 Cookie 不被小米云鉴权接受（服务端行为；不使用系统账号 Cookie 时客户端无法修复）。同时看全屏登录页「自检」：401 请先完成网页登录/STS；可点「复制诊断信息」查看各端点/UA/重复键详情（不含令牌值）。 |
 | 日志有 hook，但云端任务失败 | 多为服务端权益/设备白名单/CTA/硬件 token 或用户 Cookie 鉴权链路差异问题，客户端无法解决。 |
 | 相机模式栏没有「徕卡一瞬」 | 确认已刷 Magisk CameraOnly 变体（CN MiuiCamera 6.7.000280.0）；LSPosed 作用域勾选 `com.android.camera`；强制停止相机；日志查 `camera hook installed:`；若 HAL 无 legendary 能力则仅 UI 出现、实际效果可能仍缺失（见第 3 节）。 |
 | 模块 App 打不开/白屏 | 确认系统 Android System WebView 已启用；不登录网页也可直接粘贴 Cookie。 |
