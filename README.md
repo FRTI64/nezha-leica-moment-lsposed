@@ -66,21 +66,30 @@ VERSION_CODE=2 VERSION_NAME=1.1.0 ./build.sh app dist/LeicaMoment_LSPosed_v1.1.0
 ## 4. 安装与使用
 
 1. 设备：Xiaomi 17 Ultra（nezha），已装 Magisk + LSPosed（Zygisk/Riru），系统需支持 legacy Xposed API。
-2. `adb install -r prebuilt/LeicaMoment_LSPosed_v1.1.0.apk`（或文件管理器安装）。
-3. LSPosed 管理器 → 模块 → 启用「徕卡一瞬 LSPosed」→ 作用域勾选 `com.miui.mediaeditor`（可选 `com.miui.gallery`）→ 重启一次。
+2. `adb install -r prebuilt/LeicaMoment_LSPosed_v1.2.0.apk`（或文件管理器安装）。
+3. LSPosed 管理器 → 模块 → 启用「徕卡一瞬 LSPosed」→ 作用域勾选 `com.miui.mediaeditor` 与 `com.miui.gallery` → 重启一次。
 4. 打开模块 App：登录/粘贴/捕获 Cookie，按需打开开关并保存。
-5. **强制停止** `com.miui.mediaeditor`（建议连同 `com.miui.gallery`）后重开相册 → 编辑，验证「徕卡一瞬/二次增强」入口。
+5. **清除一次相册能力缓存**（相册会缓存能力探测结果）：设置→应用→相册→存储→清除缓存，或 `adb shell pm clear com.miui.gallery`（谨慎）；然后 **强制停止** `com.miui.mediaeditor`/`com.miui.gallery` 再重开相册 → 编辑，验证「徕卡一瞬/二次增强」入口。
 6. 生效日志：LSPosed 日志中前缀 `LeicaMomentLSP:`（如 `cookie hook installed: go.e.b()` / `bs.e.b()`、`account probe hook: ...`）。
 
 完整用户指南：[app/README_APP.md](app/README_APP.md)
 
 ## 5. 验证状态
 
-- APK 可复现构建（两次构建 sha256 一致：`8bf6c96e9024067496cb06a45547258232fa4621c6395c48fed94152a27a0f0f`，29,284 B）。
+- APK 可复现构建（两次构建 sha256 一致：`af62fb01beb7d3d38e54c8d12a8d50da105b1ddea3a5721c9cc4ef39b60f00c1`，29,284 B，versionCode 3 / v1.2.0）。
 - apksigner：`Verifies`，v1+v2+v3 方案齐全（`--min-sdk-version 21`）；`aapt2 dump badging` 包名/版本/minSdk 29/targetSdk 35/INTERNET/launchable Activity 正确。
 - dex 内不打包 `de.robv.android.xposed` API 类（LSPosed 要求）；`assets/xposed_init` → `HookEntry`。
 - Hook 目标均来自两国 smali 逐行证据（见 [docs/lsposed_hook_targets.md](docs/lsposed_hook_targets.md)），代码以"目标列表 + try/catch"实现，未知版本安全跳过。
 - **未做真机验证**：运行时 hook 生效、服务端是否接受注入 Cookie 无法离线验证。
+
+## 5.1 HyperOS 4 的 Rust 组件（重要）
+
+HyperOS 4 中大量组件由 Rust 重写（`/system_ext/lib64` 102 个 `libhyper_os_*` 库、`libhyper_os_flutter.so`；`hyperos.rustruntime.jar` 是 612 B 桩）。`com.miui.gallery` 为 **Flutter + Rust**（`libapp.so` Dart AOT + 36.5 MB `libapp_gallery.so`，flutter_rust_bridge），APK 内无 classes.dex：
+
+- 相册的能力探测在 Rust（`media_editor_capability.rs`）中调用 **mediaeditor 的 Java Provider**（`com.miui.mediaeditor.api`）→ 本模块对 mediaeditor 的 Java hook 作用在真正判定点；v1.2.0 另对 gallery 进程安装 `SystemProperties` 伪装作为 Java/JNI 桥安全网。
+- 相册会把能力结果缓存到 SharedPreferences → 开启模块后需**清除一次相册缓存/数据**。
+- LSPosed **无法** hook Dart/Rust/native 逻辑；对 Rust/native 的属性读取，请搭配 **Magisk resetprop 属性层**（本组织另一个仓库的 PropsOnly 模块，`REGION_SPOOF=1`），它修改真实属性区。
+- 相机/编辑器 legend 云端路径在当前版本仍是 Java（已确认），Cookie 注入不受影响。
 
 ## 6. 已知限制
 
@@ -89,6 +98,7 @@ VERSION_CODE=2 VERSION_NAME=1.1.0 ./build.sh app dist/LeicaMoment_LSPosed_v1.1.0
 - 修改 Cookie/开关后必须强制停止 `com.miui.mediaeditor` 进程（拦截器有进程内静态缓存）。
 - 不同 `com.miui.mediaeditor` 小版本混淆类名可能变化；模块会记录 `cookie target not present ...` 并跳过。
 - LSPosed 上游 release（v1.9.2）仅支持到 Android 14；Android 17 设备需使用维护分支/新版本（legacy 模块格式仍兼容）。
+- Dart/Rust/native 代码无法被 LSPosed hook；相册能力缓存需手动清除；完整 Rust 属性覆盖需搭配 Magisk 属性层。
 
 ## 7. 相关项目
 
