@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "2.4.2";
+    public static final String MODULE_VERSION = "2.4.3";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
@@ -24,6 +24,9 @@ public final class ModuleConfig {
     public static final String AUTHORITY = "com.nezha.leica.lsposed.config";
 
     public static final String METHOD_GET_CONFIG = "get_config";
+    /** On-device cloud-request trace (URL path + HTTP code only; no tokens/query/body). */
+    public static final String METHOD_SET_CLOUD_TRACE = "set_cloud_trace";
+    public static final String METHOD_GET_CLOUD_TRACE = "get_cloud_trace";
 
     public static final String KEY_COOKIE = "cookie";
     public static final String KEY_ENABLE_GATE_BYPASS = "enable_gate_bypass";
@@ -32,6 +35,8 @@ public final class ModuleConfig {
     public static final String KEY_COOKIE_SOURCES = "cookie_sources";
     public static final String KEY_COOKIE_DUP_KEYS = "cookie_dup_keys";
     public static final String KEY_FORCE_CTA = "force_cta";
+    /** Newline-joined cloud request trace lines (no token values). */
+    public static final String KEY_CLOUD_TRACE = "cloud_trace";
 
     /** Defaults (also used when the provider is unreachable). */
     public static final boolean DEFAULT_ENABLE_GATE_BYPASS = true;
@@ -63,6 +68,7 @@ public final class ModuleConfig {
         b.putBoolean("enable_gate_bypass", p.getBoolean(KEY_ENABLE_GATE_BYPASS, DEFAULT_ENABLE_GATE_BYPASS));
         b.putBoolean("enable_cookie", p.getBoolean(KEY_ENABLE_COOKIE, DEFAULT_ENABLE_COOKIE));
         b.putBoolean("force_cta", p.getBoolean(KEY_FORCE_CTA, DEFAULT_FORCE_CTA));
+        b.putString("cloud_trace", p.getString(KEY_CLOUD_TRACE, ""));
         b.putString("module_version", MODULE_VERSION);
         return b;
     }
