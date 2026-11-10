@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Leica Moment LSP (hello)</string>
+    <string name="module_description">Hello-world LSPosed module built without Gradle; logs on package load.</string>
+    <string name="hello_body">Hello from the Gradle-free LSPosed toolchain test module.\n\nThis APK was built with aapt2 + javac + d8 + zipalign + apksigner and is signed with a local debug key. If you can read this, the resource pipeline and signing pipeline both work.</string>
+</resources>
