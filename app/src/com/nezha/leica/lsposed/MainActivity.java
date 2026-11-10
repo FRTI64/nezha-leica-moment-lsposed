@@ -137,6 +137,7 @@ public class MainActivity extends Activity {
     private TextView probeStatus;
     private LinearLayout probeResults;
     private TextView probeAggregate;
+    private TextView cloudTraceView;
     private CheckBox cbGate;
     private CheckBox cbCookie;
     private TextView helpView;
@@ -163,6 +164,7 @@ public class MainActivity extends Activity {
             updateInspector();
             updateStatusPill();
             updateProbeUiState();
+            loadCloudTrace();
         } catch (Throwable t) {
             Log.e(TAG, "onCreate failed", t);
             setActionStatus("\u754c\u9762\u521d\u59cb\u5316\u5931\u8d25\uff1a" + t);
@@ -177,6 +179,7 @@ public class MainActivity extends Activity {
             updateInspector();
             updateStatusPill();
             updateProbeUiState();
+            loadCloudTrace();
         } catch (Throwable ignored) {
         }
     }
@@ -557,6 +560,39 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         aglp.topMargin = dp(8);
         body.addView(probeAggregate, aglp);
+
+        TextView traceLabel = text("\u4e91\u7aef\u8bf7\u6c42\u8f68\u8ff9\uff08\u6700\u8fd112\u6761\uff09", 13, colorText, true);
+        traceLabel.setPadding(0, dp(12), 0, dp(4));
+        body.addView(traceLabel);
+
+        cloudTraceView = text("\uff08\u5c1a\u672a\u8bfb\u53d6\u3002\u5148\u6253\u5f00\u76f8\u518c\u7f16\u8f91\u5e76\u89e6\u53d1\u4e00\u6b21\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\uff0c\u518d\u70b9\u300c\u5237\u65b0\u4e91\u7aef\u8f68\u8ff9\u300d\u3002\uff09",
+                11, colorTextDim, false);
+        cloudTraceView.setTextIsSelectable(true);
+        cloudTraceView.setTypeface(Typeface.MONOSPACE);
+        cloudTraceView.setPadding(dp(8), dp(8), dp(8), dp(8));
+        cloudTraceView.setBackground(roundBg(colorFieldBg, dp(8), colorBorder));
+        body.addView(cloudTraceView);
+
+        Button refreshTrace = actionButton("\u5237\u65b0\u4e91\u7aef\u8f68\u8ff9", "\u5237\u65b0\u4e91\u7aef\u8bf7\u6c42\u8f68\u8ff9",
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        loadCloudTrace();
+                        setActionStatus("\u5df2\u5237\u65b0\u4e91\u7aef\u8f68\u8ff9\uff08\u82e5\u4e3a\u7a7a\uff0c\u8bf7\u5148\u5728\u76f8\u518c\u7f16\u8f91\u4e2d\u89e6\u53d1\u4e00\u6b21\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\uff09\u3002");
+                    }
+                });
+        LinearLayout.LayoutParams trlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        trlp.topMargin = dp(6);
+        body.addView(refreshTrace, trlp);
+
+        TextView traceHint = text("\u63d0\u793a\uff1a\u5148\u6253\u5f00\u76f8\u518c\u7f16\u8f91\u5e76\u89e6\u53d1\u4e00\u6b21\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\uff0c"
+                + "\u518d\u5237\u65b0/\u590d\u5236\u8bca\u65ad\uff0c\u53ef\u770b\u5230 App \u5b9e\u9645\u8bf7\u6c42\u7684\u4e91\u5730\u5740\u4e0e HTTP \u7801"
+                + "\uff08\u4e0d\u542b\u4ee4\u724c\u3001\u4e0d\u542b\u67e5\u8be2\u53c2\u6570\uff09\u3002\n"
+                + "\u8f68\u8ff9\u4ec5\u8bb0\u5f55\u8def\u5f84\u547d\u4e2d aiPhotoCloud / legend / hardwareAuth / hardwareNonce / auth/v1 / billing "
+                + "\u4e14 host \u5c5e\u4e8e xiaomi/mi.com \u7684\u4e91\u8bf7\u6c42\u3002", 11, colorTextDim, false);
+        traceHint.setPadding(0, dp(6), 0, 0);
+        body.addView(traceHint);
 
         TextView note = text("\u63a2\u6d4b\u7aef\u70b9\u4e3a\u53ea\u8bfb\u63a2\u6d4b\uff0c\u53ef\u80fd\u968f\u670d\u52a1\u7aef\u8c03\u6574\uff1b"
                 + "\u4e0d\u4f1a\u4e0a\u4f20/\u8bb0\u5f55 Cookie \u4e2d\u7684\u4ee4\u724c\u503c\u3002", 11, colorTextDim, false);
@@ -1557,6 +1593,32 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------
+    // Cloud request trace (URL path + HTTP code only; no tokens/query/body)
+    // ------------------------------------------------------------------
+
+    private void loadCloudTrace() {
+        String trace = readCloudTraceString();
+        if (cloudTraceView != null) {
+            if (trace.isEmpty()) {
+                cloudTraceView.setText("\uff08\u6682\u65e0\u8f68\u8ff9\u3002\u8bf7\u5148\u6253\u5f00\u76f8\u518c\u7f16\u8f91\u5e76\u89e6\u53d1\u4e00\u6b21\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\uff0c\u518d\u70b9\u300c\u5237\u65b0\u4e91\u7aef\u8f68\u8ff9\u300d\u3002\uff09");
+            } else {
+                cloudTraceView.setText(trace);
+            }
+        }
+    }
+
+    private String readCloudTraceString() {
+        try {
+            Bundle result = getContentResolver().call(ModuleConfig.providerUri(),
+                    ModuleConfig.METHOD_GET_CLOUD_TRACE, null, null);
+            String trace = result == null ? "" : result.getString("trace");
+            return trace == null ? "" : trace;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Diagnostics (no token values)
     // ------------------------------------------------------------------
 
@@ -1611,7 +1673,17 @@ public class MainActivity extends Activity {
                 sb.append(" [").append(levelLabel(r.level)).append("]\n");
             }
         }
-        sb.append("Note: no token values included; only key names/lengths, HTTP codes and selftest status.\n");
+        String cloudTrace = readCloudTraceString();
+        sb.append("Cloud request trace (last 12; method/host/path/code/cookie only, no query/token/body):\n");
+        if (cloudTrace.isEmpty()) {
+            sb.append(" - (none yet; open 相册编辑 and trigger 二次增强 first)\n");
+        } else {
+            String[] lines = cloudTrace.split("\n");
+            for (int i = 0; i < lines.length; i++) {
+                sb.append(" - ").append(lines[i]).append('\n');
+            }
+        }
+        sb.append("Note: no token values included; only key names/lengths, HTTP codes, URL paths and selftest status.\n");
         return sb.toString();
     }
 
