@@ -10,9 +10,11 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v1.2.0.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 3 / versionName 1.2.0，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 `v1.0.0` / `v1.1.0` 已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.1.0.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 5 / versionName 2.1.0，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 `v1.0.0` / `v1.1.0` / `v1.2.0` / `v2.0.0` 已被本版取代）。
+   本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（既不 resetprop，也不 hook SystemProperties）。
+   v2.1.0 在 v2.0.0 编辑器 hook 基础上新增 **相机「徕卡一瞬」拍摄** hook（需 Magisk CameraOnly 变体，见第 3 节）。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -25,15 +27,53 @@
 1. 在 LSPosed 管理器中启用「徕卡一瞬 LSPosed」。
 2. **勾选作用域**：
    - `com.miui.mediaeditor` —— **必选**（相册编辑，门禁与 Cookie 钩子都在这里）。
-   - `com.miui.gallery` —— 可选（v1.2.0 起为相册进程安装 SystemProperties 伪装 hook，
-     作为其 Flutter+Rust 能力探测在 Java/JNI 侧的“安全网”；Cookie/账号 hook 只在 mediaeditor 安装）。
+   - `com.android.camera` —— 使用相机「徕卡一瞬」拍摄时**必选**（配合 Magisk CameraOnly 变体，
+     见第 3 节；模块强制相机自身的两个 Java 判定方法返回 true，不涉及属性）。
+   - `com.miui.gallery` —— 可选（不安装任何 hook，仅保留作用域占位、无害；
+     能力判定由 mediaeditor 侧的 predicate hook 完成）。
 3. 保存后建议**重启手机一次**（首次安装模块必须让 Zygote 重新加载；之后修改开关只需强制停止应用）。
 4. **首次启用后请清除相册能力缓存一次**（相册是 Flutter+Rust，Rust 层会缓存“能力不可用”的旧结果）：
-   设置 → 应用 → 相册 → 存储 → 「清除缓存」/「清除数据」，详见第 3 节。
+   设置 → 应用 → 相册 → 存储 → 「清除缓存」/「清除数据」，详见第 4 节。
 
-## 3. HyperOS 4 的 Rust 组件与相册能力缓存（v1.2.0 新增，重要）
+## 3. 相机「徕卡一瞬」拍摄（需要 Magisk CameraOnly 变体）
 
-HyperOS 4 引入了大量 Rust 组件，本模块因此有两处需要特别注意：
+本模块分成两部分，按需使用：
+
+- **编辑器 / 云端「二次增强」**：只需本模块 + LSPosed 作用域 `com.miui.mediaeditor`（**无需 Magisk 属性模块**）。
+  模块直接 hook 编辑器的 availability predicate 返回 true，不涉及任何属性伪装。
+- **相机 / 「徕卡一瞬」拍摄**：需要 **Magisk「CameraOnly」变体（v1.2.0，无属性伪装）**，它只做一件事：
+  只读挂载国行 MiuiCamera APK（`com.android.camera` 6.7.000280.0，Xiaomi 签名）到系统中，
+  **不 resetprop、不写属性**；再配合本模块并在 LSPosed 作用域勾选 `com.android.camera`。
+  相机模式/UI/资源来自国行 APK，门禁由本模块的 Java 方法 hook 打开（全部 XC_MethodReplacement → true）：
+  - H1 `com.android.camera.features.mode.legendary.LegendaryEnter.support()Z` → true
+    （模式 id `0x100`「徕卡一瞬」出现在模式列表/模式抽屉）；
+  - H2 `Te.c.W()Z`（static）→ true（isLeicaCustomize：徕卡 UI/水印/风格入口，15+ 调用点，
+    绕过其内部对 `ro.theme_customize=="LCC"` 与 `camera.debug.theme_customize.disabled` 的读取）；
+  - H3 兜底：混淆设备配置类 `h5()Z` → true（H1 无法解析时的备用路径）。
+  **没有 hook 任何 SystemProperties，也没有读写属性。**
+
+**相机部分限制（重要）：**
+
+- 厂商相机 HAL 的 legendary 能力（M9 CCD / M3 MONOPAN-50 / M10R 等 profile、
+  `com.xiaomi.sessionparams.legendMode`、`com.xiaomi.legendMode.capsInfo`、
+  `getLegendBokehCapsInfo` 等 session 参数）由 vendor camera pipeline 提供，Java hook **无法添加**；
+  若本机 HAL 未暴露 legendary 能力，模式/UI 会出现但实际徕卡效果可能缺失或回退（例如按普通模式成像）。
+- 运行时 `legend_mode` SDK / native 采集桥（`LegendaryNativeCaptureBridge` 等）在 APK dex 中仅被引用、
+  未定义，可能依赖动态下载/插件/native，同样属于 Java hook 不可控范围。
+- 云端「二次增强」权益属于编辑器 + 服务端，相机 hook 只负责让拍摄模式存在。
+- 国际版相机 6.6 的等价 hook 未覆盖；必须使用国行 MiuiCamera APK（CameraOnly 变体）。
+- 水印/EXIF 品牌字段可能仍显示国际版（相关属性消费点未 hook，且本模块不伪装属性）。
+
+**安装步骤：**
+
+1. 刷入 Magisk「CameraOnly」变体（v1.2.0；仅挂载国行 `MiuiCamera.apk`，不修改任何属性）。
+2. 在 LSPosed 中启用本模块并勾选作用域 `com.android.camera`（编辑器用户同时勾选 `com.miui.mediaeditor`）。
+3. 重启手机 / 强制停止相机进程后打开相机 → 模式栏应出现「徕卡一瞬」（模式 id `0x100`）。
+4. LSPosed 日志可见 `camera hook installed: ...`。
+
+## 4. HyperOS 4 的 Rust 组件与相册能力缓存（重要）
+
+HyperOS 4 引入了大量 Rust 组件：
 
 1. **系统层 Rust 组件**：`system_ext` 中有 102 个 `libhyper_os_<domain>_public/private.so`
    （account / network / app / binder / axml / …）以及 `libhyper_os_flutter.so`；
@@ -44,29 +84,28 @@ HyperOS 4 引入了大量 Rust 组件，本模块因此有两处需要特别注�
    它的能力探测（`src/api/front_end/media_editor_capability.rs`）通过 MediaEditor provider
    `com.miui.mediaeditor.api` 的 `method_request_function_list` /
    `method_is_legend_available` / `method_is_xm_legend_available` 等方法查询——
-   provider 运行在 mediaeditor 进程（Java），本模块的 props hook 对它有效。
-   但相册 Rust 层会把设备能力**缓存到 SharedPreferences**（日志：
-   `capabilities SP schema mismatch … drop` / `Device capabilities cache invalidated`），
-   若旧的“不可用”结果已缓存，**启用模块后入口可能仍不出现**。
+   **provider 运行在 mediaeditor 进程（Java），V2 的 predicate hook 正是 hook 这条 Java 链路上的判定方法。**
 
-**对策：**
+**为什么这不再是问题（V2 与 v1.x 的区别）：**
 
+- V2 **完全不涉及属性伪装**：既不 resetprop，也不 hook `SystemProperties`。因此相册
+  Rust/native 组件直接读取属性（`__system_property_get`、`SystemPropertyMethodChannel` 等）
+  即使绕过 Java 层也**与本模块无关**——本模块不依赖任何属性值。
+- LSPosed 无法 hook Dart/Rust 代码，但本路径的判定点在 mediaeditor 的 Java 代码
+  （`MediaEditorProviderForGallery` 调用的 availability predicate），V2 直接在 Java 层
+  让它们返回 true。
+
+**唯一仍需手动处理的一点——相册能力缓存：**
+
+- 相册 Rust 层会把设备能力**缓存到 SharedPreferences**（日志：
+  `capabilities SP schema mismatch … drop` / `Device capabilities cache invalidated`）；
+  若旧的“不可用”结果已缓存，启用模块后入口可能仍不出现。
 - **首次启用模块后清除相册能力缓存一次**：设置 → 应用 → 相册 → 存储 →
   「清除缓存」/「清除数据」（或 `adb shell pm clear com.miui.gallery`）。
   注意：清除数据会同时清掉相册的本地设置/缓存，请谨慎，之后重新打开相册。
-- 相册 Rust 自身也会通过 Rust/JNI/MethodChannel 属性桥
-  （`SystemPropertyMethodChannel`，channel `com.android.os.system.properties.method.channel`）
-  读取 `ro.miui.build.region`、`ro.product.mod_device`、`IS_INTERNATIONAL_BUILD` 等。
-  v1.2.0 已为相册进程额外安装 SystemProperties 伪装 hook（作用于其 Java/JNI 侧，
-  LSPosed 日志可见 `gallery scope: SystemProperties spoof hooks installed (Rust bridge safety net)`）；
-  **但 LSPosed 无法 hook Dart/Rust/native 代码**，如果 Rust 直接调用
-  `__system_property_get`，Java hook 覆盖不到。
-- **需要彻底覆盖 Rust/native 属性读取时，请配合 Magisk props 层**
-  （本项目同系列 props-only Magisk 模块，`REGION_SPOOF=1`）：`resetprop` 修改的是真实
-  系统属性区，Rust/native 组件也能看到；Xposed 模块只保证 Java 侧看到伪装值。
-- 相机/媒体编辑器的徕卡云端路径已确认为 Java 实现，Cookie 注入与账号探针不受 Rust 影响。
+- 相机/媒体编辑器的徕卡云端路径为 Java 实现，Cookie 注入与账号探针不受 Rust 影响。
 
-## 4. 登录小米账号 / 获取 Cookie
+## 5. 登录小米账号 / 获取 Cookie
 
 模块 App 首页（打开「徕卡一瞬 LSPosed」图标）提供三种 Cookie 来源：
 
@@ -100,11 +139,11 @@ HyperOS 4 引入了大量 Rust 组件，本模块因此有两处需要特别注�
 > 本模块已 hook 该探针：当配置了 Cookie 时，用 Cookie 中的 `userId`/`cUserId`（URL 解码后）
 > 作为账号标识返回，找不到则回退字符串 `demo`，使上传流程可以继续。
 
-## 5. 开关说明
+## 6. 开关说明
 
 | 开关 | 默认 | 作用 |
 |---|---|---|
-| 启用门禁绕过 | ✅ 开 | 在 mediaeditor 进程内 hook `android.os.SystemProperties.get/getBoolean/getInt` 并伪装：`ro.miui.build.region=cn`、`ro.theme_customize=LCC`、`ro.theme_leica=true`、`ro.boot.product.theme_customize=P1_Leica`、`ro.special_edition=true`。使 `method_is_legend_available` 判定为真。**不修改系统属性文件。** |
+| 启用门禁绕过 | ✅ 开 | **直接 hook 判定方法**（不修改、不伪装任何系统属性）：mediaeditor 进程内让 CN `rt.a.g()` / `ah0.b.g()`、GLOBAL `mx.a.g()` / `r21.e.b()` 返回 true；相机进程内让 `LegendaryEnter.support()`、`Te.c.W()`（及兜底 `h5()`）返回 true。未 hook `bx.t.a()` / `ft.s.a()`（xm/传奇变体，保持原行为）。 |
 | 启用 Cookie 注入 | ✅ 开 | hook 混淆类 `go.e.b()`（CN 2.10.43）/ `bs.e.b()`（GLOBAL 2.10.40），用上方配置的 Cookie 替换云端请求的 STS Cookie；Cookie 为空时保持原样。同时把该 Cookie **写入 App 进程内的静态缓存字段**（`go.e.b` / `bs.e.b`），否则只有第一个 HTTP 请求会被替换、后续请求会走缓存字段继续发系统 Cookie。 |
 | （自动）登录探针 | 随 Cookie 注入 | hook AccountUtil `ga0.e.a(Context)`（CN）/ `be0.e.a(Context)`（GLOBAL）：本机没有系统小米账号时返回由 Cookie 中 `userId`/`cUserId` 推导的账号标识（无则 `demo`），避免上传步骤 `uploadFile: failed, not login`；已有系统账号时保持原值。 |
 | 强制 CTA 已同意 | ❌ 关 | 仅预留：分析版本中未找到干净的 CTA 门禁方法，开启后只记录日志，仍需在 App 内手动同意 CTA。有隐私风险，默认关闭。 |
@@ -116,13 +155,15 @@ HyperOS 4 引入了大量 Rust 组件，本模块因此有两处需要特别注�
 使用旧 Cookie/旧开关状态（模块配置本身约 8 秒刷新，但进程缓存的 Cookie 无法原地失效）。
 一般无需重启手机；**首次安装模块后建议重启一次手机**。
 
-## 6. 验证是否生效
+## 7. 验证是否生效
 
 1. 强制停止后打开「相册 → 编辑」，观察「徕卡一瞬 / 二次增强」入口是否出现
    （国际版原本应隐藏）。
 2. 生效时 LSPosed 日志（管理器 → 日志）可见前缀 `LeicaMomentLSP:` 的记录，例如：
-   - `hooked SystemProperties.get(String)`
-   - `gallery scope: SystemProperties spoof hooks installed (Rust bridge safety net)`（相册进程）
+   - `predicate hook installed: rt.a.g()Z -> true`（CN；另有 `ah0.b.g()`）/ `mx.a.g()Z`、`r21.e.b()Z`（GLOBAL）
+   - `gallery: no hooks in no-props mode (Flutter/Rust; capability probe runs in mediaeditor)`（相册进程）
+   - `camera hook installed: com.android.camera.features.mode.legendary.LegendaryEnter.support()Z -> true`（相机进程）
+   - `camera hook installed: Te.c.W()Z -> true` / `camera hook installed: <混淆类>.h5()Z -> true (fallback)`
    - `cookie hook installed: go.e.b()Ljava/lang/String;`（CN）或 `bs.e.b()...`（GLOBAL）
    - `cookie cache field updated: go.e.b -> user cookie (persists for subsequent requests)`
    - `injecting user cookie (N chars) via ...`
@@ -131,7 +172,7 @@ HyperOS 4 引入了大量 Rust 组件，本模块因此有两处需要特别注�
    - `captured system-account cookie (N chars) reported to module app, ok=true`
 3. 触发一次云端任务：若服务端返回 401/任务失败/排队失败，见下面限制。
 
-## 7. 已知限制（重要）
+## 8. 已知限制（重要）
 
 - **云端权益在服务端校验**：点数/配额/设备白名单（`leica_support_devices`、
   `lcc_support_devices`、`mist_support_devices`）来自小米云端 CloudConfig，
@@ -140,7 +181,7 @@ HyperOS 4 引入了大量 Rust 组件，本模块因此有两处需要特别注�
 - **硬件认证 token**：云链路还要求 `/auth/v1/hardwareAuthToken`（依赖系统小米账号
   与硬件指纹）；本模块不伪造该 token。
 - **CTA 隐私协议（有意不强制）**：CTA 是 `LegendaryActivity` 正常弹出的用户同意窗口；
-  「二次增强」入口是否显示只取决于系统属性伪装（props），与 CTA 状态无关，因此**不需要**
+  「二次增强」入口是否显示只取决于上述判定方法（predicate），与 CTA 状态无关，因此**不需要**
   绕过 CTA。本模块 **不会** hook `BaseGalleryPreferences$a.a()` 等 CTA 门禁（那是隐私违规）；
   「强制 CTA」开关默认关闭且只记录日志，请用户在 App 内正常同意。
 - **未登录设备的账号探针**：本模块用 Cookie 中的 `userId`/`cUserId` 伪造 AccountUtil 返回值
@@ -148,24 +189,28 @@ HyperOS 4 引入了大量 Rust 组件，本模块因此有两处需要特别注�
   无 CN 权益/无硬件认证的账号。
 - **Cookie 来源差异**：WebView 登录 Cookie ≠ 原生 STS Cookie；优先用「系统账号捕获」。
 - **进程内 Cookie 缓存**：App 的网络拦截器把 Cookie 缓存在静态字段里，模块已同步覆盖该字段；
-  但更换 Cookie/关闭注入后，**必须强制停止 mediaeditor 进程**才会完全生效（见第 5 节）。
-- **Rust/native 覆盖有限**：HyperOS 4 的 Rust 组件（含相册 `libapp_gallery.so`、102 个
-  `libhyper_os_*.so`）无法被 LSPosed hook；本模块对相册只做 Java/JNI 侧的 SystemProperties
-  伪装，Rust 直接读 native 属性时无效。彻底覆盖请配合 Magisk props/resetprop 模块；
-  相册 Rust 的能力缓存需手动清除（见第 3 节）。
+  但更换 Cookie/关闭注入后，**必须强制停止 mediaeditor 进程**才会完全生效（见第 6 节）。
+- **相机部分限制**：见第 3 节 —— 厂商相机 HAL legendary 能力与运行时 `legend_mode` SDK 无法用 Java
+  hook 添加；若 HAL 不支持，模式/UI 可能出现但实际徕卡处理会缺失/回退；必须使用国行 MiuiCamera
+  APK（Magisk CameraOnly 变体）；云端权益仍由服务端校验。
+- **Dart/Rust 无法 hook，但不影响本路径**：HyperOS 4 的 Rust 组件（相册
+  `libapp_gallery.so`、102 个 `libhyper_os_*.so`）无法被 LSPosed hook；V2 不依赖任何
+  属性伪装，判定点位于 mediaeditor 的 Java predicate，故本路径不受影响。
+  相册 Rust 的能力缓存仍可能需手动清除一次（见第 4 节）。
 - **未真机测试**：本项目无真机/无设备连接，所有 hook 均为静态分析结论 + try/catch 兜底；
   不同 `com.miui.mediaeditor` 版本类名可能变化，模块会记录
   `cookie target not present ...` 并跳过，不会崩溃目标 App。
-- **仅作用于本进程**：SystemProperties 伪装只影响 mediaeditor 进程内的读取，
-  不改系统全局属性；相机端徕卡采集界面不属本模块范围。
+- **仅作用于 mediaeditor 进程**：predicate hook 与 Cookie hook 只在该进程内生效，
+  不修改系统全局状态；相机端徕卡采集界面不属本模块范围。
 - 本模块不收集、不上传任何数据；Cookie 只保存在本机模块私有目录
   （ContentProvider 仅对 `com.miui.mediaeditor` / `com.miui.gallery` / 自身开放，按 uid+包名校验）。
 
-## 8. 排错
+## 9. 排错
 
 | 现象 | 处理 |
 |---|---|
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
-| 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `hooked SystemProperties` / `gallery scope: SystemProperties spoof hooks installed`；必要时重启手机；彻底覆盖 Rust 属性读取请配合 Magisk props 模块（见第 3 节）。 |
+| 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
 | 日志有 hook，但云端任务失败 | 多为服务端权益/设备白名单/CTA/硬件 token 问题，客户端无法解决；可先确认系统已登录小米账号并尝试系统账号捕获的 Cookie。 |
+| 相机模式栏没有「徕卡一瞬」 | 确认已刷 Magisk CameraOnly 变体（CN MiuiCamera 6.7.000280.0）；LSPosed 作用域勾选 `com.android.camera`；强制停止相机；日志查 `camera hook installed:`；若 HAL 无 legendary 能力则仅 UI 出现、实际效果可能仍缺失（见第 3 节）。 |
 | 模块 App 打不开/白屏 | 确认系统 Android System WebView 已启用；不登录网页也可直接粘贴 Cookie。 |
