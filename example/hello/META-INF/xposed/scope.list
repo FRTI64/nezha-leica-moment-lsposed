@@ -1,0 +1,6 @@
+# Static scope, one package name per line (blank lines and lines starting
+# with '#' are ignored). LSPosed uses this only for modern-API modules; for
+# legacy modules the user must pick the scope manually in LSPosed Manager.
+com.miui.mediaeditor
+com.miui.gallery
+com.android.camera
