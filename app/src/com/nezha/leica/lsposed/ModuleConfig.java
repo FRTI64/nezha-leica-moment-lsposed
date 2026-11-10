@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "1.2.0";
+    public static final String MODULE_VERSION = "2.1.0";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
@@ -29,12 +29,12 @@ public final class ModuleConfig {
 
     public static final String KEY_COOKIE = "cookie";
     public static final String KEY_CAPTURED_COOKIE = "captured_cookie";
-    public static final String KEY_ENABLE_PROPS = "enable_props";
+    public static final String KEY_ENABLE_GATE_BYPASS = "enable_gate_bypass";
     public static final String KEY_ENABLE_COOKIE = "enable_cookie";
     public static final String KEY_FORCE_CTA = "force_cta";
 
     /** Defaults (also used when the provider is unreachable). */
-    public static final boolean DEFAULT_ENABLE_PROPS = true;
+    public static final boolean DEFAULT_ENABLE_GATE_BYPASS = true;
     public static final boolean DEFAULT_ENABLE_COOKIE = true;
     public static final boolean DEFAULT_FORCE_CTA = false;
 
@@ -53,14 +53,14 @@ public final class ModuleConfig {
 
     /**
      * Builds the Bundle returned by the provider to the hooked process.
-     * Keys: cookie, captured_cookie, enable_props, enable_cookie, force_cta, module_version.
+     * Keys: cookie, captured_cookie, enable_gate_bypass, enable_cookie, force_cta, module_version.
      */
     public static Bundle buildConfigBundle(Context context) {
         SharedPreferences p = prefs(context);
         Bundle b = new Bundle();
         b.putString("cookie", p.getString(KEY_COOKIE, ""));
         b.putString("captured_cookie", p.getString(KEY_CAPTURED_COOKIE, ""));
-        b.putBoolean("enable_props", p.getBoolean(KEY_ENABLE_PROPS, DEFAULT_ENABLE_PROPS));
+        b.putBoolean("enable_gate_bypass", p.getBoolean(KEY_ENABLE_GATE_BYPASS, DEFAULT_ENABLE_GATE_BYPASS));
         b.putBoolean("enable_cookie", p.getBoolean(KEY_ENABLE_COOKIE, DEFAULT_ENABLE_COOKIE));
         b.putBoolean("force_cta", p.getBoolean(KEY_FORCE_CTA, DEFAULT_FORCE_CTA));
         b.putString("module_version", MODULE_VERSION);
