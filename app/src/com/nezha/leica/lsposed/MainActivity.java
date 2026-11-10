@@ -7,6 +7,7 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -20,17 +21,12 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.webkit.CookieManager;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -47,9 +43,10 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Module UI v2.2.0: status overview, Xiaomi account / Cookie management
- * (WebView login + explicit STS step + manual paste + system-account capture),
- * Cookie composition inspector, read-only Cookie health probe, toggles and help.
+ * Module UI v2.3.0: status overview, Xiaomi account / Cookie management
+ * (full-screen login activity, manual paste, system-account captured STS cookie,
+ * explicit Cookie-source modes), composition inspector, read-only Cookie health
+ * probe with UA adaptation, toggles and help.
  *
  * <p>Fully programmatic (no XML layouts). All network I/O runs on background
  * threads; token values are never logged and never shown in probe results
@@ -59,43 +56,24 @@ public class MainActivity extends Activity {
 
     private static final String TAG = "LeicaMomentLSP";
 
-    /** Xiaomi passport login page (same one the CN ROM uses for the account flow). */
-    /**
-     * Primary entry: open i.mi.com directly. The i.mi.com web front-end starts the real
-     * passport login -> STS redirect chain with a VALID sign parameter.
-     *
-     * <p>NOTE: an earlier build used a handcrafted
-     * {@code account.xiaomi.com/pass/serviceLogin?...callback=i.mi.com/sts?sign=x...} URL;
-     * {@code sign=x} is only a placeholder copied from ROM strings. The passport service
-     * echoed that invalid sign and the STS callback returned an HTTP error page, which
-     * WebView reports as {@code net::ERR_HTTP_RESPONSE_CODE_FAILURE}. Do not reintroduce it.</p>
-     */
-    private static final String LOGIN_URL = "https://i.mi.com/";
-
-    /** Fallback: Xiaomi account page (if the i.mi.com redirect chain misbehaves). */
-    private static final String ACCOUNT_URL = "https://account.xiaomi.com/";
+    /** Login/STS is handled by the full-screen {@link LoginActivity}. */
+    private static final int REQ_LOGIN = 1001;
 
     /** Generic gallery UA; the cloud API uses MiuiGallery/<versionCode>. */
     private static final String PROBE_UA = "MiuiGallery/210994048";
 
-    /** Cookie sources merged by "读取登录 Cookie" (dedupe by name, first wins). */
-    private static final String[] COOKIE_URLS = new String[]{
-            "https://account.xiaomi.com",
-            "https://i.mi.com",
-            "https://gallery.i.mi.com",
-            "https://api.open.ai.xiaomi.com",
-            "https://xiaomi.com"
-    };
+    /**
+     * Chrome-mobile UA. Some passport/web cookies are bound to the browser UA;
+     * the probe retries with this UA for web-bound cookies when it gets a 401.
+     */
+    private static final String WEB_UA = "Mozilla/5.0 (Linux; Android 15; 2312DRA50C "
+            + "Build/AP3A.240905.015) AppleWebKit/537.36 (KHTML, like Gecko) "
+            + "Chrome/120.0.0.0 Mobile Safari/537.36";
 
     /**
      * Read-only GET endpoints used by the Cookie health probe (never POST).
-     *
-     * <p>Chosen for a real auth signal: without a valid Xiaomi session the
-     * {@code /status/lite/setting?type=N} endpoint returns HTTP 401 with
-     * {@code {"R":401,...,"D":"...serviceLogin..."}}, while with a valid cookie it is not
-     * asked to log in again. The previous list was misleading: {@code gallery.i.mi.com}
-     * does not resolve (DNS), and {@code /gallery/public/resource/info} returns
-     * 200 + parameter-error JSON even without cookies (no auth signal).</p>
+     * {@code /status/lite/setting?type=N} returns HTTP 401 + serviceLogin JSON for a
+     * session the server does not accept (real auth signal).
      */
     private static final String[] PROBE_ENDPOINTS = new String[]{
             "https://i.mi.com/status/lite/setting?type=1",
@@ -137,7 +115,7 @@ public class MainActivity extends Activity {
     private int colorFieldBg;
 
     // ------------------------------------------------------------------
-    // Views
+    // Views / state
     // ------------------------------------------------------------------
     private LinearLayout root;
     private TextView statusPill;
@@ -145,15 +123,18 @@ public class MainActivity extends Activity {
     private TextView cookieRow;
     private TextView stsRow;
     private TextView probeRow;
-    private LinearLayout webContainer;
-    private WebView webView;
-    /** One-shot auto-recovery guard for an HTTP error on the i.mi.com/sts callback page. */
-    private boolean stsErrorRecovered = false;
+    private LinearLayout modeGroup;
+    private RadioButton rbAuto;
+    private RadioButton rbManual;
+    private RadioButton rbCaptured;
+    private TextView effectiveSourceView;
     private EditText cookieEdit;
     private LinearLayout inspectorChips;
     private TextView inspectorSummary;
     private TextView stsWarning;
     private TextView capturedView;
+    private LinearLayout capturedChips;
+    private TextView capturedSummary;
     private TextView actionStatus;
     private Button probeButton;
     private TextView probeStatus;
@@ -164,6 +145,7 @@ public class MainActivity extends Activity {
     private TextView helpView;
     private Button helpToggle;
 
+    private String cookieMode = ModuleConfig.MODE_AUTO;
     private volatile boolean probing;
     private final List<ProbeResult> lastProbe = new ArrayList<ProbeResult>();
 
@@ -194,31 +176,45 @@ public class MainActivity extends Activity {
         super.onResume();
         try {
             refreshCaptured();
+            updateOverview();
+            updateInspector();
+            updateStatusPill();
+            updateProbeUiState();
         } catch (Throwable ignored) {
         }
     }
 
     @Override
-    protected void onPause() {
-        try {
-            CookieManager.getInstance().flush();
-        } catch (Throwable ignored) {
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_LOGIN) {
+            return;
         }
-        super.onPause();
-    }
-
-    @Override
-    protected void onDestroy() {
         try {
-            if (webView != null) {
-                webView.stopLoading();
-                webView.loadUrl("about:blank");
-                webView.destroy();
-                webView = null;
+            if (resultCode != RESULT_OK || data == null) {
+                setActionStatus("\u5168\u5c4f\u767b\u5f55\u9875\u5df2\u53d6\u6d88\u3002");
+                return;
             }
-        } catch (Throwable ignored) {
+            String cookie = data.getStringExtra(LoginActivity.EXTRA_COOKIE);
+            if (cookie == null || cookie.trim().isEmpty()) {
+                setActionStatus("\u5168\u5c4f\u767b\u5f55\u9875\u672a\u8bfb\u53d6\u5230 Cookie\u3002");
+                return;
+            }
+            cookie = cookie.trim();
+            if (cookieEdit != null) {
+                cookieEdit.setText(cookie);
+            }
+            updateOverview();
+            updateInspector();
+            updateStatusPill();
+            updateProbeUiState();
+            setActionStatus("\u5df2\u4ece\u5168\u5c4f\u767b\u5f55\u9875\u8bfb\u53d6 Cookie\uff08" + cookie.length()
+                    + " \u5b57\u7b26\uff09\u3002\n\u7f51\u9875 Cookie \u53ef\u80fd\u4e0d\u88ab\u4e91 API \u63a5\u53d7\uff08\u5e38\u89c1 HTTP 401\uff09\uff1b"
+                    + "\u82e5\u4f53\u68c0\u5931\u8d25\u4e14\u5df2\u6709\u7cfb\u7edf\u6355\u83b7\u7684 Cookie\uff0c"
+                    + "\u8bf7\u628a\u300cCookie \u6765\u6e90\u300d\u5207\u6362\u4e3a\u300c\u7cfb\u7edf\u6355\u83b7\u300d\u6216\u300c\u81ea\u52a8\u300d\u3002");
+        } catch (Throwable t) {
+            setActionStatus("\u5904\u7406\u767b\u5f55\u7ed3\u679c\u5931\u8d25\uff1a" + t);
         }
-        super.onDestroy();
     }
 
     // ------------------------------------------------------------------
@@ -343,147 +339,75 @@ public class MainActivity extends Activity {
     private void buildCookieCard() {
         LinearLayout body = sectionCard("\u2461 \u8d26\u53f7\u4e0e Cookie");
 
-        TextView hint = text("\u63a8\u8350\u76f4\u63a5\u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\uff1a"
-                + "i.mi.com \u4f1a\u81ea\u52a8\u8df3\u8f6c\u8d26\u53f7\u767b\u5f55\u5e76\u5b8c\u6210 STS\uff08\u4e0b\u53d1 serviceToken\uff09\uff0c"
-                + "\u5b8c\u6210\u540e\u518d\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002", 12, colorTextDim, false);
-        hint.setPadding(0, 0, 0, dp(4));
+        TextView hint = text("\u63a8\u8350\u6d41\u7a0b\uff1a\u7cfb\u7edf\u8bbe\u7f6e\u91cc\u767b\u5f55\u5c0f\u7c73\u8d26\u53f7 \u2192 "
+                + "\u6253\u5f00\u76f8\u518c\u7f16\u8f91\u4e00\u6b21\uff08\u6a21\u5757\u81ea\u52a8\u6355\u83b7 App \u7684 STS Cookie\uff09\u2192 "
+                + "\u6765\u6e90\u9009\u300c\u81ea\u52a8/\u7cfb\u7edf\u6355\u83b7\u300d\u2192 \u4fdd\u5b58\u3002\n"
+                + "\u5168\u5c4f\u7f51\u9875\u767b\u5f55\u4ec5\u4f5c\u4e3a\u5907\u7528\uff1a\u7f51\u9875 Cookie \u5e38\u5e26 pass_ua=web\uff0c"
+                + "\u53ef\u80fd\u88ab\u4e91 API \u62d2\u7edd\uff08\u5e38\u89c1 HTTP 401\uff09\u3002", 12, colorTextDim, false);
         body.addView(hint);
 
-        LinearLayout row1 = buttonRow(body);
-        addRowButton(row1, "\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09", "\u76f4\u63a5\u6253\u5f00 i.mi.com\uff0c\u81ea\u52a8\u8d70\u767b\u5f55\u4e0e STS", true,
-                new View.OnClickListener() {
+        Button full = actionButton("\u5168\u5c4f\u767b\u5f55\u9875\uff08\u83b7\u53d6 Cookie\uff09",
+                "\u6253\u5f00\u5168\u5c4f\u7f51\u9875\u767b\u5f55\u9875", new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
-                        onLoginClick();
+                        onFullLoginClick();
                     }
                 });
-        addRowButton(row1, "\u6253\u5f00\u5c0f\u7c73\u8d26\u53f7\u9875\uff08\u5907\u7528\uff09", "\u5907\u7528\uff1a\u6253\u5f00 account.xiaomi.com",
-                false, new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        onStsClick();
-                    }
-                });
-
-        LinearLayout row2 = buttonRow(body);
-        addRowButton(row2, "\u8bfb\u53d6\u767b\u5f55 Cookie", "\u4ece WebView \u5408\u5e76\u8bfb\u53d6 Cookie", true,
-                new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        onCaptureClick();
-                    }
-                });
-        addRowButton(row2, "\u590d\u5236 Cookie", "\u590d\u5236\u5f53\u524d Cookie \u5230\u526a\u8d34\u677f", false,
-                new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        onCopyClick();
-                    }
-                });
-
-        LinearLayout row3 = buttonRow(body);
-        addRowButton(row3, "\u4fdd\u5b58\u8bbe\u7f6e", "\u4fdd\u5b58 Cookie \u4e0e\u5f00\u5173", true,
-                new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        onSaveClick();
-                    }
-                });
-        addRowButton(row3, "\u6e05\u7a7a Cookie", "\u6e05\u7a7a\u624b\u52a8 Cookie", false,
-                new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        onClearClick();
-                    }
-                });
-
-        // Collapsible WebView container.
-        webContainer = new LinearLayout(this);
-        webContainer.setOrientation(LinearLayout.VERTICAL);
-        webContainer.setVisibility(View.GONE);
-        LinearLayout.LayoutParams wclp = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        wclp.topMargin = dp(10);
-        body.addView(webContainer, wclp);
-        try {
-            WebView wv = new WebView(this);
-            WebSettings ws = wv.getSettings();
-            ws.setJavaScriptEnabled(true);
-            ws.setDomStorageEnabled(true);
-            ws.setDatabaseEnabled(true);
-            ws.setAllowFileAccess(false);
-            ws.setAllowContentAccess(false);
-            ws.setUserAgentString(ws.getUserAgentString()
-                    + " LeicaMomentLSP/" + ModuleConfig.MODULE_VERSION);
-            CookieManager cm = CookieManager.getInstance();
-            cm.setAcceptCookie(true);
-            cm.setAcceptThirdPartyCookies(wv, true);
-            wv.setBackgroundColor(colorFieldBg);
-            wv.setWebViewClient(new WebViewClient() {
-                @Override
-                public void onPageFinished(WebView view, String url) {
-                    setActionStatus("\u7f51\u9875\u5df2\u52a0\u8f7d\uff1a" + url
-                            + "\n\u767b\u5f55/STS \u5b8c\u6210\u540e\uff0c\u8bf7\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002");
-                }
+        flp.topMargin = dp(8);
+        body.addView(full, flp);
 
-                @Override
-                public void onReceivedHttpError(WebView view, WebResourceRequest request,
-                                                WebResourceResponse errorResponse) {
-                    if (request == null || !request.isForMainFrame()) {
-                        return;
-                    }
-                    int code = errorResponse == null ? -1 : errorResponse.getStatusCode();
-                    String url = request.getUrl() == null ? "" : request.getUrl().toString();
-                    // One-shot recovery: an HTTP error on the i.mi.com/sts callback usually
-                    // means the sign/login state is stale. Go back to i.mi.com and let it
-                    // re-run the whole login -> STS chain with a fresh, valid sign.
-                    if (!stsErrorRecovered && url.contains("i.mi.com/sts")) {
-                        stsErrorRecovered = true;
-                        setActionStatus("STS \u56de\u8c03\u9875\u8fd4\u56de HTTP " + code
-                                + "\uff08\u5e38\u89c1\u4e8e\u65e7 sign/\u767b\u5f55\u6001\u5931\u6548\uff09\uff0c"
-                                + "\u5df2\u81ea\u52a8\u56de\u5230 i.mi.com \u91cd\u65b0\u8d70\u767b\u5f55\u6d41\u7a0b\u2026");
-                        try {
-                            view.loadUrl(LOGIN_URL);
-                        } catch (Throwable ignored) {
-                        }
-                        return;
-                    }
-                    setActionStatus("\u7f51\u9875\u8fd4\u56de HTTP " + code + "\uff1a" + url
-                            + "\n\u5efa\u8bae\u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\u91cd\u8bd5\uff1b"
-                            + "\u82e5\u4ecd\u5931\u8d25\uff0c\u8bf7\u6539\u7528\u300c\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u300d\u6216\u624b\u52a8\u7c98\u8d34 Cookie\u3002");
-                }
+        TextView modeLabel = text("Cookie \u6765\u6e90\uff08\u5f53\u524d\u751f\u6548\u6765\u6e90\u5728\u4e0b\u65b9\u663e\u793a\uff09",
+                13, colorText, true);
+        modeLabel.setPadding(0, dp(12), 0, dp(2));
+        body.addView(modeLabel);
 
-                @Override
-                public void onReceivedError(WebView view, WebResourceRequest request,
-                                            WebResourceError error) {
-                    if (request == null || !request.isForMainFrame()) {
-                        return;
+        RadioGroup group = new RadioGroup(this);
+        group.setOrientation(RadioGroup.VERTICAL);
+        modeGroup = new LinearLayout(this);
+        modeGroup.setOrientation(LinearLayout.VERTICAL);
+        rbAuto = radio("\u81ea\u52a8\uff08\u63a8\u8350\uff09",
+                "\u81ea\u52a8\uff1a\u624b\u52a8 Cookie \u4f18\u5148\uff0c\u5426\u5219\u4f7f\u7528\u7cfb\u7edf\u6355\u83b7\u7684 STS Cookie");
+        rbManual = radio("\u624b\u52a8 / \u7f51\u9875 Cookie",
+                "\u53ea\u4f7f\u7528\u624b\u52a8\u6216\u5168\u5c4f\u7f51\u9875\u767b\u5f55\u83b7\u53d6\u7684 Cookie");
+        rbCaptured = radio("\u7cfb\u7edf\u6355\u83b7\uff08STS Cookie\uff09",
+                "\u53ea\u4f7f\u7528 App \u81ea\u5df1\u901a\u8fc7\u5c0f\u7c73\u8d26\u53f7\u83b7\u53d6\u7684 STS Cookie\uff08\u6700\u53ef\u9760\uff09");
+        group.addView(rbAuto);
+        group.addView(rbManual);
+        group.addView(rbCaptured);
+        body.addView(group);
+        group.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(RadioGroup g, int checkedId) {
+                try {
+                    if (checkedId == rbAuto.getId()) {
+                        setCookieMode(ModuleConfig.MODE_AUTO);
+                    } else if (checkedId == rbManual.getId()) {
+                        setCookieMode(ModuleConfig.MODE_MANUAL);
+                    } else if (checkedId == rbCaptured.getId()) {
+                        setCookieMode(ModuleConfig.MODE_CAPTURED);
                     }
-                    int code = error == null ? -1 : error.getErrorCode();
-                    String desc = error == null || error.getDescription() == null
-                            ? "" : String.valueOf(error.getDescription());
-                    String url = request.getUrl() == null ? "" : request.getUrl().toString();
-                    setActionStatus("\u7f51\u9875\u52a0\u8f7d\u5931\u8d25\uff08" + code + " " + desc + "\uff09\uff1a" + url
-                            + "\n\u8bf7\u68c0\u67e5\u7f51\u7edc\uff1b\u82e5\u4e3a i.mi.com/sts \u62a5\u9519\uff0c"
-                            + "\u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\u91cd\u8d70\u767b\u5f55\u3002");
+                } catch (Throwable ignored) {
                 }
-            });
-            webView = wv;
-            webContainer.addView(wv, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(340)));
-        } catch (Throwable t) {
-            Log.e(TAG, "webview unavailable", t);
-            TextView fail = text("\u7cfb\u7edf WebView \u4e0d\u53ef\u7528\uff1a\u8bf7\u5148\u5728\u7cfb\u7edf\u8bbe\u7f6e\u4e2d"
-                    + "\u542f\u7528 Android System WebView\uff1b\u4e5f\u53ef\u76f4\u63a5\u7c98\u8d34 Cookie\u3002",
-                    12, colorYellow, false);
-            fail.setPadding(0, dp(6), 0, dp(6));
-            webContainer.addView(fail);
-            webView = null;
-        }
+            }
+        });
 
-        TextView editLabel = text("Cookie \u5b57\u7b26\u4e32\uff08\u53ef\u7f16\u8f91 / \u7c98\u8d34\uff09", 13, colorText, true);
-        editLabel.setPadding(0, dp(12), 0, dp(4));
-        body.addView(editLabel);
+        TextView modeHint = text("\u8bf4\u660e\uff1a\u7cfb\u7edf\u6355\u83b7 = App \u81ea\u5df1\u901a\u8fc7\u5c0f\u7c73\u8d26\u53f7\u62ff\u5230\u7684 STS Cookie"
+                + "\uff08\u6700\u53ef\u9760\uff0c\u542b hyperos_sec_common_* / serviceToken\uff09\uff1b"
+                + "\u624b\u52a8/\u7f51\u9875 Cookie \u53ef\u80fd\u88ab\u4e91 API \u62d2\u7edd\uff08\u5e38\u89c1 401\uff09\u3002",
+                11, colorTextDim, false);
+        modeHint.setPadding(0, dp(2), 0, 0);
+        body.addView(modeHint);
+
+        effectiveSourceView = text("", 12, colorAccent, true);
+        effectiveSourceView.setPadding(0, dp(6), 0, 0);
+        body.addView(effectiveSourceView);
+
+        TextView manualLabel = text("\u624b\u52a8 / \u7f51\u9875 Cookie\uff08\u53ef\u7f16\u8f91 / \u7c98\u8d34\uff1b\u7531\u5168\u5c4f\u767b\u5f55\u9875\u586b\u5165\uff09",
+                13, colorText, true);
+        manualLabel.setPadding(0, dp(10), 0, dp(4));
+        body.addView(manualLabel);
 
         cookieEdit = new EditText(this);
         cookieEdit.setHint("passToken=\u2026; cUserId=\u2026; userId=\u2026; serviceToken=\u2026");
@@ -523,7 +447,7 @@ public class MainActivity extends Activity {
         body.addView(cookieEdit, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView inspLabel = text("Cookie \u7ec4\u6210\u68c0\u67e5\uff08\u4ec5\u663e\u793a\u952e\u540d\uff0c\u4e0d\u663e\u793a\u4ee4\u724c\u503c\uff09",
+        TextView inspLabel = text("\u624b\u52a8 Cookie \u7ec4\u6210\u68c0\u67e5\uff08\u4ec5\u663e\u793a\u952e\u540d\uff0c\u4e0d\u663e\u793a\u4ee4\u724c\u503c\uff09",
                 13, colorText, true);
         inspLabel.setPadding(0, dp(12), 0, dp(4));
         body.addView(inspLabel);
@@ -545,7 +469,7 @@ public class MainActivity extends Activity {
         wlp.topMargin = dp(8);
         body.addView(stsWarning, wlp);
 
-        TextView capLabel = text("\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u7684 Cookie\uff08\u66f4\u53ef\u9760\uff09",
+        TextView capLabel = text("\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u7684 STS Cookie\uff08\u6700\u53ef\u9760\uff09",
                 13, colorText, true);
         capLabel.setPadding(0, dp(14), 0, dp(4));
         body.addView(capLabel);
@@ -553,6 +477,17 @@ public class MainActivity extends Activity {
         capturedView = text("\u5c1a\u672a\u6355\u83b7\u3002", 12, colorTextDim, false);
         capturedView.setTextIsSelectable(true);
         body.addView(capturedView);
+
+        capturedChips = new LinearLayout(this);
+        capturedChips.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams cclp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cclp.topMargin = dp(4);
+        body.addView(capturedChips, cclp);
+
+        capturedSummary = text("", 12, colorTextDim, false);
+        capturedSummary.setPadding(0, dp(4), 0, 0);
+        body.addView(capturedSummary);
 
         LinearLayout row4 = buttonRow(body);
         addRowButton(row4, "\u767b\u5f55\u7cfb\u7edf\u5c0f\u7c73\u8d26\u53f7", "\u8c03\u8d77\u7cfb\u7edf\u5c0f\u7c73\u8d26\u53f7\u767b\u5f55",
@@ -562,11 +497,34 @@ public class MainActivity extends Activity {
                         onSystemAccountLoginClick();
                     }
                 });
-        addRowButton(row4, "\u586b\u5165\u6355\u83b7\u7684 Cookie", "\u628a\u6355\u83b7\u7684 Cookie \u586b\u5165\u8f93\u5165\u6846",
+        addRowButton(row4, "\u586b\u5165\u6355\u83b7\u7684 Cookie", "\u628a\u7cfb\u7edf\u6355\u83b7\u7684 Cookie \u586b\u5165\u624b\u52a8\u8f93\u5165\u6846",
                 false, new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
                         onUseCapturedClick();
+                    }
+                });
+
+        LinearLayout row5 = buttonRow(body);
+        addRowButton(row5, "\u590d\u5236 Cookie", "\u590d\u5236\u5f53\u524d\u751f\u6548 Cookie \u5230\u526a\u8d34\u677f", true,
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        onCopyClick();
+                    }
+                });
+        addRowButton(row5, "\u4fdd\u5b58\u8bbe\u7f6e", "\u4fdd\u5b58 Cookie\u3001\u6765\u6e90\u4e0e\u5f00\u5173", false,
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        onSaveClick();
+                    }
+                });
+        addRowButton(row5, "\u6e05\u7a7a\u624b\u52a8 Cookie", "\u6e05\u7a7a\u624b\u52a8 Cookie\uff08\u4fdd\u7559\u7cfb\u7edf\u6355\u83b7\uff09",
+                false, new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        onClearClick();
                     }
                 });
 
@@ -581,8 +539,9 @@ public class MainActivity extends Activity {
     private void buildProbeCard() {
         LinearLayout body = sectionCard("\u2462 Cookie \u4f53\u68c0\uff08\u53ea\u8bfb\u63a2\u6d4b\uff09");
 
-        TextView desc = text("\u4f7f\u7528\u5f53\u524d Cookie \u5bf9\u5c0f\u7c73\u4e91\u7aef\u53d1\u8d77 GET \u53ea\u8bfb\u63a2\u6d4b"
-                + "\uff08\u4e0d\u6d88\u8017\u914d\u989d\uff09\u3002\u7ed3\u679c\u4ec5\u7528\u4e8e\u5224\u65ad Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b"
+        TextView desc = text("\u4f7f\u7528\u300c\u5f53\u524d\u751f\u6548\u6765\u6e90\u300d\u7684 Cookie \u5bf9\u5c0f\u7c73\u4e91\u7aef\u53d1\u8d77 GET \u53ea\u8bfb\u63a2\u6d4b"
+                + "\uff08\u4e0d\u6d88\u8017\u914d\u989d\uff09\u3002\u82e5\u7f51\u9875 Cookie \u7ed1\u5b9a\u6d4f\u89c8\u5668 UA\uff0c\u4f1a\u81ea\u52a8\u7528 Web UA \u5c1d\u8bd5\uff1b"
+                + "HTTP 401 \u65f6\u4f1a\u6362\u53e6\u4e00\u79cd UA \u91cd\u8bd5\u4e00\u6b21\u3002\u7ed3\u679c\u4ec5\u7528\u4e8e\u5224\u65ad Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b"
                 + "\u4e91\u7aef\u6743\u76ca\u4ecd\u7531\u5c0f\u7c73\u670d\u52a1\u7aef\u6821\u9a8c\u3002", 12, colorTextDim, false);
         body.addView(desc);
 
@@ -632,7 +591,8 @@ public class MainActivity extends Activity {
         body.addView(cbGate);
 
         cbCookie = new CheckBox(this);
-        cbCookie.setText("\u542f\u7528 Cookie \u6ce8\u5165\uff08\u66ff\u6362 App \u4ece\u7cfb\u7edf\u8d26\u53f7\u83b7\u53d6\u7684 STS Cookie\uff09");
+        cbCookie.setText("\u542f\u7528 Cookie \u6ce8\u5165\uff08\u6309\u300cCookie \u6765\u6e90\u300d\u4f18\u5148\u7ea7\u6ce8\u5165\uff1b"
+                + "\u9ed8\u8ba4\u81ea\u52a8\uff1a\u624b\u52a8\u4f18\u5148\uff0c\u5426\u5219\u7cfb\u7edf\u6355\u83b7\uff09");
         cbCookie.setTextSize(13);
         cbCookie.setTextColor(colorText);
         cbCookie.setContentDescription("\u542f\u7528 Cookie \u6ce8\u5165\u5f00\u5173");
@@ -734,6 +694,16 @@ public class MainActivity extends Activity {
         return v;
     }
 
+    private RadioButton radio(String label, String desc) {
+        RadioButton rb = new RadioButton(this);
+        rb.setText(label);
+        rb.setTextSize(13);
+        rb.setTextColor(colorText);
+        rb.setContentDescription(desc);
+        rb.setPadding(0, dp(6), 0, dp(6));
+        return rb;
+    }
+
     private LinearLayout buttonRow(LinearLayout parent) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -760,7 +730,7 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
-        b.setTextSize(13);
+        b.setTextSize(12);
         b.setTextColor(Color.WHITE);
         b.setContentDescription(desc);
         b.setPadding(dp(8), dp(6), dp(8), dp(6));
@@ -799,78 +769,42 @@ public class MainActivity extends Activity {
     // Action handlers
     // ------------------------------------------------------------------
 
-    private void onLoginClick() {
-        setWebExpanded(true);
-        if (webView == null) {
-            setActionStatus("\u7cfb\u7edf WebView \u4e0d\u53ef\u7528\uff0c\u8bf7\u76f4\u63a5\u7c98\u8d34 Cookie\u3002");
-            return;
-        }
+    private void onFullLoginClick() {
         try {
-            stsErrorRecovered = false;
-            webView.loadUrl(LOGIN_URL);
-            setActionStatus("\u5df2\u6253\u5f00 i.mi.com\uff1a\u672a\u767b\u5f55\u65f6\u4f1a\u81ea\u52a8\u8df3\u8f6c\u5c0f\u7c73\u8d26\u53f7\u767b\u5f55\uff0c"
-                    + "\u767b\u5f55\u540e\u81ea\u52a8\u5b8c\u6210 STS \u5e76\u8fd4\u56de i.mi.com\u3002\u5b8c\u6210\u540e\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002");
+            Intent intent = new Intent(this, LoginActivity.class);
+            startActivityForResult(intent, REQ_LOGIN);
+            setActionStatus("\u6b63\u5728\u6253\u5f00\u5168\u5c4f\u767b\u5f55\u9875\u2026\u5b8c\u6210\u767b\u5f55/STS \u540e\u70b9\u53f3\u4e0a\u89d2\u300c\u5b8c\u6210\u300d\u3002");
         } catch (Throwable t) {
-            setActionStatus("\u6253\u5f00 i.mi.com \u5931\u8d25\uff1a" + t);
+            Log.e(TAG, "start LoginActivity failed", t);
+            setActionStatus("\u65e0\u6cd5\u6253\u5f00\u5168\u5c4f\u767b\u5f55\u9875\uff1a" + t
+                    + "\n\u53ef\u6539\u7528\u300c\u767b\u5f55\u7cfb\u7edf\u5c0f\u7c73\u8d26\u53f7\u300d\u6355\u83b7\u6216\u624b\u52a8\u7c98\u8d34 Cookie\u3002");
         }
-    }
-
-    private void onStsClick() {
-        setWebExpanded(true);
-        if (webView == null) {
-            setActionStatus("\u7cfb\u7edf WebView \u4e0d\u53ef\u7528\uff0c\u8bf7\u76f4\u63a5\u7c98\u8d34 Cookie \u6216\u7528\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u3002");
-            return;
-        }
-        try {
-            webView.loadUrl(ACCOUNT_URL);
-            setActionStatus("\u5df2\u6253\u5f00\u5c0f\u7c73\u8d26\u53f7\u9875\uff08\u5907\u7528\uff09\u3002\u5efa\u8bae\u4f18\u5148\u4f7f\u7528"
-                    + "\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\uff1b\u8fd9\u91cc\u767b\u5f55\u540e\u8bf7\u56de\u5230 i.mi.com "
-                    + "\u5b8c\u6210 STS\uff0c\u7136\u540e\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\u3002");
-        } catch (Throwable t) {
-            setActionStatus("\u6253\u5f00\u5c0f\u7c73\u8d26\u53f7\u9875\u5931\u8d25\uff1a" + t);
-        }
-    }
-
-    private void setWebExpanded(boolean expanded) {
-        if (webContainer != null) {
-            webContainer.setVisibility(expanded ? View.VISIBLE : View.GONE);
-        }
-    }
-
-    private void onCaptureClick() {
-        String cookie = captureCookie();
-        if (cookie.isEmpty()) {
-            setActionStatus("\u672a\u4ece WebView \u8bfb\u53d6\u5230 Cookie\u3002\u8bf7\u5148\u5728\u4e0a\u65b9\u767b\u5f55\u9875\u767b\u5f55"
-                    + "\uff08\u6216\u6253\u5f00 i.mi.com \u5b8c\u6210 STS\uff09\u540e\u518d\u70b9\u8bfb\u53d6\u3002");
-            return;
-        }
-        cookieEdit.setText(cookie);
-        setActionStatus("\u5df2\u8bfb\u53d6 Cookie\uff08" + cookie.length()
-                + " \u5b57\u7b26\uff09\u3002\u8bf7\u68c0\u67e5\u7ec4\u6210\u540e\u70b9\u300c\u4fdd\u5b58\u8bbe\u7f6e\u300d\u3002");
     }
 
     private void onCopyClick() {
-        String cookie = currentCookie();
+        String cookie = effectiveCookie();
         if (cookie.isEmpty()) {
-            setActionStatus("\u6ca1\u6709\u53ef\u590d\u5236\u7684 Cookie\u3002");
+            setActionStatus("\u5f53\u524d\u6765\u6e90\u6ca1\u6709\u53ef\u590d\u5236\u7684 Cookie\u3002");
             return;
         }
         try {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("Xiaomi Cookie", cookie));
-            setActionStatus("\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f\uff08\u6ce8\u610f\uff1a\u526a\u8d34\u677f\u5185\u5bb9\u53ef\u80fd\u88ab\u5176\u5b83\u5e94\u7528\u8bfb\u53d6\uff09\u3002");
+            setActionStatus("\u5df2\u590d\u5236\u5f53\u524d\u751f\u6548 Cookie\uff08" + effectiveSourceLabel()
+                    + "\uff09\u5230\u526a\u8d34\u677f\uff08\u6ce8\u610f\uff1a\u526a\u8d34\u677f\u5185\u5bb9\u53ef\u80fd\u88ab\u5176\u5b83\u5e94\u7528\u8bfb\u53d6\uff09\u3002");
         } catch (Throwable t) {
             setActionStatus("\u590d\u5236\u5931\u8d25\uff1a" + t);
         }
     }
 
     private void onSaveClick() {
-        String cookie = cookieEdit.getText().toString().trim();
+        String manual = manualCookie();
         SharedPreferences p = ModuleConfig.prefs(this);
         boolean ok;
         try {
             ok = p.edit()
-                    .putString(ModuleConfig.KEY_COOKIE, cookie)
+                    .putString(ModuleConfig.KEY_COOKIE, manual)
+                    .putString(ModuleConfig.KEY_COOKIE_MODE, cookieMode)
                     .putBoolean(ModuleConfig.KEY_ENABLE_GATE_BYPASS, cbGate.isChecked())
                     .putBoolean(ModuleConfig.KEY_ENABLE_COOKIE, cbCookie.isChecked())
                     .putBoolean(ModuleConfig.KEY_FORCE_CTA, false)
@@ -883,17 +817,18 @@ public class MainActivity extends Activity {
         updateInspector();
         updateStatusPill();
         updateProbeUiState();
-        setActionStatus("\u5df2\u4fdd\u5b58" + (ok ? "\u6210\u529f" : "\u5931\u8d25") + "\u3002Cookie "
-                + cookie.length() + " \u5b57\u7b26\uff1b\u95e8\u7981\u89e3\u9501="
-                + (cbGate.isChecked() ? "\u5f00" : "\u5173") + "\uff0cCookie \u6ce8\u5165="
-                + (cbCookie.isChecked() ? "\u5f00" : "\u5173") + "\u3002\n"
+        setActionStatus("\u5df2\u4fdd\u5b58" + (ok ? "\u6210\u529f" : "\u5931\u8d25") + "\u3002\u6765\u6e90="
+                + modeLabel(cookieMode) + "\uff1b\u5f53\u524d\u751f\u6548\uff1a" + effectiveSourceLabel()
+                + "\uff1bCookie " + effectiveCookie().length() + " \u5b57\u7b26\u3002\n"
                 + "\u8bf7\u5f3a\u5236\u505c\u6b62\u76f8\u5e94 App \u540e\u91cd\u65b0\u6253\u5f00\u3002");
         Toast.makeText(this, "\u4fdd\u5b58\u6210\u529f", Toast.LENGTH_SHORT).show();
     }
 
     private void onClearClick() {
         try {
-            cookieEdit.setText("");
+            if (cookieEdit != null) {
+                cookieEdit.setText("");
+            }
             ModuleConfig.prefs(this).edit().remove(ModuleConfig.KEY_COOKIE).apply();
             updateOverview();
             updateInspector();
@@ -907,16 +842,22 @@ public class MainActivity extends Activity {
 
     private void onUseCapturedClick() {
         try {
-            String captured = ModuleConfig.prefs(this)
-                    .getString(ModuleConfig.KEY_CAPTURED_COOKIE, "");
-            if (captured == null || captured.isEmpty()) {
-                setActionStatus("\u8fd8\u6ca1\u6709\u6355\u83b7\u5230 Cookie\u3002\u8bf7\u5148\u5728 LSPosed \u4e2d\u542f\u7528\u6a21\u5757\u5e76\u52fe\u9009\u4f5c\u7528\u57df"
-                        + " com.miui.mediaeditor\uff0c\u7136\u540e\u6253\u5f00\u76f8\u518c\u2192\u7f16\u8f91\u4e00\u6b21\u89e6\u53d1\u4e91\u7aef\u8bf7\u6c42\u3002");
+            String captured = capturedCookie();
+            if (captured.isEmpty()) {
+                setActionStatus("\u8fd8\u6ca1\u6709\u6355\u83b7\u5230 Cookie\u3002\u8bf7\u5148\u5728\u7cfb\u7edf\u8bbe\u7f6e\u91cc\u767b\u5f55\u5c0f\u7c73\u8d26\u53f7\uff0c"
+                        + "\u7136\u540e\u6253\u5f00\u76f8\u518c\u2192\u7f16\u8f91\u4e00\u6b21\u89e6\u53d1\u4e91\u7aef\u8bf7\u6c42\uff0c"
+                        + "\u6a21\u5757\u4f1a\u81ea\u52a8\u6355\u83b7 App \u53d6\u5230\u7684 STS Cookie\u3002");
                 return;
             }
-            cookieEdit.setText(captured);
-            setActionStatus("\u5df2\u586b\u5165\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u7684 Cookie\uff08" + captured.length()
-                    + " \u5b57\u7b26\uff09\uff0c\u8bf7\u70b9\u300c\u4fdd\u5b58\u8bbe\u7f6e\u300d\u3002");
+            if (cookieEdit != null) {
+                cookieEdit.setText(captured);
+            }
+            updateOverview();
+            updateInspector();
+            updateStatusPill();
+            updateProbeUiState();
+            setActionStatus("\u5df2\u628a\u7cfb\u7edf\u6355\u83b7\u7684 STS Cookie\uff08" + captured.length()
+                    + " \u5b57\u7b26\uff09\u586b\u5165\u624b\u52a8\u8f93\u5165\u6846\uff1b\u5efa\u8bae\u4fdd\u6301\u6765\u6e90\u4e3a\u300c\u81ea\u52a8\u300d\u6216\u300c\u7cfb\u7edf\u6355\u83b7\u300d\u3002");
         } catch (Throwable t) {
             setActionStatus("\u586b\u5165\u5931\u8d25\uff1a" + t);
         }
@@ -943,7 +884,7 @@ public class MainActivity extends Activity {
         try {
             AccountManager am = AccountManager.get(this);
             setActionStatus("\u6b63\u5728\u8c03\u8d77\u7cfb\u7edf\u5c0f\u7c73\u8d26\u53f7\u767b\u5f55\u754c\u9762\u2026"
-                    + "\uff08\u90e8\u5206 ROM \u6ca1\u6709\u8be5\u754c\u9762\uff0c\u53ef\u6539\u7528\u7f51\u9875\u767b\u5f55\u6216\u624b\u52a8\u7c98\u8d34\uff09");
+                    + "\uff08\u90e8\u5206 ROM \u6ca1\u6709\u8be5\u754c\u9762\uff0c\u53ef\u6539\u7528\u5168\u5c4f\u7f51\u9875\u767b\u5f55\u6216\u624b\u52a8\u7c98\u8d34\uff09");
             am.addAccount("com.xiaomi", "passportapi", null, null, this,
                     new AccountManagerCallback<Bundle>() {
                         @Override
@@ -959,7 +900,7 @@ public class MainActivity extends Activity {
                                             + "\u518d\u56de\u672c\u9875\u70b9\u300c\u586b\u5165\u6355\u83b7\u7684 Cookie\u300d\u3002";
                                 } else {
                                     msg = "\u7cfb\u7edf\u8d26\u53f7\u767b\u5f55\u6d41\u7a0b\u5df2\u8fd4\u56de\uff08\u53ef\u80fd\u88ab\u53d6\u6d88\uff09\u3002"
-                                            + "\u82e5\u672a\u767b\u5f55\u6210\u529f\uff0c\u53ef\u6539\u7528\u7f51\u9875\u767b\u5f55\u6216\u624b\u52a8\u7c98\u8d34\u3002";
+                                            + "\u82e5\u672a\u767b\u5f55\u6210\u529f\uff0c\u53ef\u6539\u7528\u5168\u5c4f\u7f51\u9875\u767b\u5f55\u6216\u624b\u52a8\u7c98\u8d34\u3002";
                                 }
                             } catch (Throwable t) {
                                 msg = "\u7cfb\u7edf\u8d26\u53f7\u767b\u5f55\u7ed3\u679c\u8bfb\u53d6\u5931\u8d25\uff1a" + t;
@@ -970,6 +911,7 @@ public class MainActivity extends Activity {
                                 public void run() {
                                     setActionStatus(finalMsg);
                                     refreshCaptured();
+                                    updateInspector();
                                 }
                             });
                         }
@@ -977,18 +919,20 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             Log.e(TAG, "addAccount failed", t);
             setActionStatus("\u65e0\u6cd5\u8c03\u8d77\u7cfb\u7edf\u5c0f\u7c73\u8d26\u53f7\u767b\u5f55\uff1a" + t
-                    + "\n\u8bf7\u6539\u7528\u7f51\u9875\u767b\u5f55\uff0c\u6216\u624b\u52a8\u7c98\u8d34 Cookie\u3002");
+                    + "\n\u8bf7\u6539\u7528\u5168\u5c4f\u7f51\u9875\u767b\u5f55\uff0c\u6216\u624b\u52a8\u7c98\u8d34 Cookie\u3002");
         }
     }
 
     // ------------------------------------------------------------------
-    // Cookie health probe (read-only GET)
+    // Cookie health probe (read-only GET, UA-adaptive)
     // ------------------------------------------------------------------
 
     private void onProbeClick() {
-        final String cookie = currentCookie();
+        final String cookie = effectiveCookie();
+        final String source = effectiveSourceLabel();
         if (cookie.isEmpty()) {
-            setActionStatus("\u8bf7\u5148\u914d\u7f6e Cookie \u518d\u68c0\u6d4b\u3002");
+            setActionStatus("\u5f53\u524d\u6765\u6e90\u6ca1\u6709\u53ef\u7528 Cookie\uff1a\u8bf7\u5148\u767b\u5f55\u7cfb\u7edf\u5c0f\u7c73\u8d26\u53f7\u5e76\u8ba9 App \u6355\u83b7 STS Cookie\uff0c"
+                    + "\u6216\u7528\u5168\u5c4f\u767b\u5f55\u9875/\u624b\u52a8\u7c98\u8d34 Cookie\u3002");
             return;
         }
         if (probing) {
@@ -998,7 +942,8 @@ public class MainActivity extends Activity {
         updateProbeUiState();
         updateOverview();
         if (probeStatus != null) {
-            probeStatus.setText("\u68c0\u6d4b\u4e2d\u2026\uff08\u6700\u591a " + (TIMEOUT_MS / 1000) + " \u79d2/\u7aef\u70b9\uff09");
+            probeStatus.setText("\u68c0\u6d4b\u4e2d\u2026\uff08\u6765\u6e90\uff1a" + source + "\uff1b\u6700\u591a "
+                    + (TIMEOUT_MS / 1000) + " \u79d2/\u7aef\u70b9\uff09");
         }
         if (probeResults != null) {
             probeResults.removeAllViews();
@@ -1007,13 +952,15 @@ public class MainActivity extends Activity {
             probeAggregate.setText("");
         }
 
+        final boolean webBound = ModuleConfig.MODE_MANUAL.equals(cookieMode)
+                || cookie.toLowerCase(Locale.US).contains("pass_ua=web");
         new Thread(new Runnable() {
             @Override
             public void run() {
                 final List<ProbeResult> results = new ArrayList<ProbeResult>();
                 try {
                     for (int i = 0; i < PROBE_ENDPOINTS.length; i++) {
-                        results.add(probeOne(PROBE_ENDPOINTS[i], cookie));
+                        results.add(probeOne(PROBE_ENDPOINTS[i], cookie, webBound));
                     }
                 } catch (Throwable t) {
                     Log.w(TAG, "probe loop error: " + t);
@@ -1030,7 +977,7 @@ public class MainActivity extends Activity {
                         updateProbeUiState();
                         if (probeStatus != null) {
                             probeStatus.setText("\u68c0\u6d4b\u5b8c\u6210\uff1a" + results.size()
-                                    + " \u4e2a\u7aef\u70b9\uff08\u53ea\u8bfb GET\uff09");
+                                    + " \u4e2a\u7aef\u70b9\uff08\u6765\u6e90\uff1a" + source + "\uff1b\u53ea\u8bfb GET\uff09");
                         }
                     }
                 });
@@ -1038,7 +985,79 @@ public class MainActivity extends Activity {
         }, "cookie-health-probe").start();
     }
 
-    private ProbeResult probeOne(String endpoint, String cookie) {
+    /**
+     * Probes one endpoint. If the first attempt returns 401 the same endpoint is
+     * retried once with the opposite UA and the best result is reported; the
+     * verdict text names the UA that passed.
+     */
+    private ProbeResult probeOne(String endpoint, String cookie, boolean webBound) {
+        String primaryUa = webBound ? WEB_UA : PROBE_UA;
+        String altUa = webBound ? PROBE_UA : WEB_UA;
+        String primaryLabel = webBound ? "Web UA" : "MiuiGallery UA";
+        String altLabel = webBound ? "MiuiGallery UA" : "Web UA";
+
+        RawFetch first = rawFetch(endpoint, cookie, primaryUa);
+        if (first.hasError()) {
+            return new ProbeResult(endpoint, VERDICT_WARN, -1,
+                    networkErrorKind(first.error), "");
+        }
+        if (first.code == 401) {
+            RawFetch second = rawFetch(endpoint, cookie, altUa);
+            if (!second.hasError() && second.code > 0 && second.code != 401) {
+                return verdict(endpoint, cookie, second, altLabel,
+                        "\uff08\u9996\u6b21 " + primaryLabel + " 401\uff0c\u6362\u7528 " + altLabel + " \u540e\u901a\u8fc7\uff09");
+            }
+            if (!second.hasError() && second.code == 401) {
+                return new ProbeResult(endpoint, VERDICT_BAD, 401,
+                        "\u51ed\u636e\u88ab\u62d2\u7edd\uff08HTTP 401\uff1bWeb UA \u4e0e MiuiGallery UA \u5747\u88ab\u62d2\u7edd\uff09",
+                        sanitizeSnippet(redactCookieValues(first.body, cookie)));
+            }
+        }
+        return verdict(endpoint, cookie, first, primaryLabel, "");
+    }
+
+    private ProbeResult verdict(String endpoint, String cookie, RawFetch f,
+                                String uaLabel, String extra) {
+        String ua = uaLabel == null ? "" : uaLabel;
+        String suffix = extra == null ? "" : extra;
+        String snippet = sanitizeSnippet(redactCookieValues(f.body, cookie));
+        if (f.code >= 200 && f.code < 300) {
+            if (looksLikeLoginRequired(f.body)) {
+                return new ProbeResult(endpoint, VERDICT_BAD, f.code,
+                        "\u670d\u52a1\u7aef\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08\u54cd\u5e94\u542b 401/\u767b\u5f55\u6807\u8bc6\uff1bUA\uff1a"
+                                + ua + "\uff09" + suffix, snippet);
+            }
+            if (looksLikeParamError(f.body)) {
+                return new ProbeResult(endpoint, VERDICT_WARN, f.code,
+                        "\u672a\u88ab\u8981\u6c42\u767b\u5f55\uff0c\u4f46\u7aef\u70b9\u53c2\u6570\u4e0d\u8db3\uff08\u65e0 auth \u4fe1\u53f7\uff1bUA\uff1a"
+                                + ua + "\uff09" + suffix, snippet);
+            }
+            return new ProbeResult(endpoint, VERDICT_OK, f.code,
+                    "\u672a\u88ab\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08Cookie \u53ef\u80fd\u6709\u6548\uff1bUA\uff1a" + ua + "\uff09" + suffix,
+                    snippet);
+        }
+        if (f.code == 301 || f.code == 302 || f.code == 303 || f.code == 307 || f.code == 308) {
+            String loc = f.location == null ? "" : f.location.toLowerCase(Locale.US);
+            if (loc.contains("login") || loc.contains("passport")
+                    || loc.contains("signin") || loc.contains("servicelogin")) {
+                return new ProbeResult(endpoint, VERDICT_BAD, f.code,
+                        "\u672a\u767b\u5f55/\u51ed\u636e\u65e0\u6548\uff08\u91cd\u5b9a\u5411\u5230\u767b\u5f55\u9875\uff1bUA\uff1a" + ua + "\uff09"
+                                + suffix, sanitizeSnippet(f.location));
+            }
+            return new ProbeResult(endpoint, VERDICT_WARN, f.code,
+                    "HTTP \u91cd\u5b9a\u5411\uff08\u975e\u767b\u5f55\uff1bUA\uff1a" + ua + "\uff09" + suffix,
+                    sanitizeSnippet(f.location));
+        }
+        if (f.code == 401 || f.code == 403) {
+            return new ProbeResult(endpoint, VERDICT_BAD, f.code,
+                    "\u51ed\u636e\u88ab\u62d2\u7edd\uff08HTTP " + f.code + "\uff1bUA\uff1a" + ua + "\uff09" + suffix,
+                    snippet);
+        }
+        return new ProbeResult(endpoint, VERDICT_WARN, f.code,
+                "HTTP " + f.code + "\uff08UA\uff1a" + ua + "\uff09" + suffix, snippet);
+    }
+
+    private RawFetch rawFetch(String endpoint, String cookie, String ua) {
         HttpURLConnection conn = null;
         try {
             URL url = new URL(endpoint);
@@ -1048,7 +1067,7 @@ public class MainActivity extends Activity {
             conn.setReadTimeout(TIMEOUT_MS);
             conn.setRequestMethod("GET");
             conn.setRequestProperty("Cookie", cookie);
-            conn.setRequestProperty("User-Agent", PROBE_UA);
+            conn.setRequestProperty("User-Agent", ua);
             conn.setRequestProperty("Accept", "application/json");
             int code = conn.getResponseCode();
             String location = conn.getHeaderField("Location");
@@ -1058,49 +1077,13 @@ public class MainActivity extends Activity {
             } catch (Throwable ignored) {
             }
             String body = readLimited(is);
-            Log.i(TAG, "probe " + endpoint + " -> HTTP " + code); // never log cookie/token values
-            if (code >= 200 && code < 300) {
-                String snippet = sanitizeSnippet(redactCookieValues(body, cookie));
-                if (looksLikeLoginRequired(body)) {
-                    return new ProbeResult(endpoint, VERDICT_BAD, code,
-                            "\u670d\u52a1\u7aef\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08\u54cd\u5e94\u542b 401/\u767b\u5f55\u6807\u8bc6\uff09", snippet);
-                }
-                if (looksLikeParamError(body)) {
-                    return new ProbeResult(endpoint, VERDICT_WARN, code,
-                            "\u672a\u88ab\u8981\u6c42\u767b\u5f55\uff0c\u4f46\u7aef\u70b9\u53c2\u6570\u4e0d\u8db3\uff08\u65e0\u6cd5\u636e\u6b64\u5224\u5b9a\uff09", snippet);
-                }
-                return new ProbeResult(endpoint, VERDICT_OK, code,
-                        "\u672a\u88ab\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08Cookie \u53ef\u80fd\u6709\u6548\uff09", snippet);
-            }
-            if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
-                String loc = location == null ? "" : location.toLowerCase(Locale.US);
-                if (loc.contains("login") || loc.contains("passport")
-                        || loc.contains("signin") || loc.contains("servicelogin")) {
-                    return new ProbeResult(endpoint, VERDICT_BAD, code,
-                            "\u672a\u767b\u5f55/\u51ed\u636e\u65e0\u6548\uff08\u91cd\u5b9a\u5411\u5230\u767b\u5f55\u9875\uff09",
-                            sanitizeSnippet(location));
-                }
-                return new ProbeResult(endpoint, VERDICT_WARN, code,
-                        "HTTP \u91cd\u5b9a\u5411\uff08\u975e\u767b\u5f55\uff09", sanitizeSnippet(location));
-            }
-            if (code == 401 || code == 403) {
-                return new ProbeResult(endpoint, VERDICT_BAD, code,
-                        "\u51ed\u636e\u88ab\u62d2\u7edd\uff08HTTP " + code + "\uff09",
-                        sanitizeSnippet(redactCookieValues(body, cookie)));
-            }
-            return new ProbeResult(endpoint, VERDICT_WARN, code, "HTTP " + code,
-                    sanitizeSnippet(redactCookieValues(body, cookie)));
+            boolean isWeb = ua != null && ua.startsWith("Mozilla");
+            Log.i(TAG, "probe " + endpoint + " ua=" + (isWeb ? "web" : "gallery")
+                    + " -> HTTP " + code); // never log cookie/token values
+            return new RawFetch(code, location, body, null);
         } catch (Throwable t) {
             Log.i(TAG, "probe " + endpoint + " -> network error " + t.getClass().getSimpleName());
-            String kind;
-            if (t instanceof java.net.UnknownHostException) {
-                kind = "\u57df\u540d\u65e0\u6cd5\u89e3\u6790\uff08DNS/\u7f51\u7edc\u95ee\u9898\uff0c\u4e0d\u5224\u5b9a Cookie\uff09";
-            } else if (t instanceof java.net.SocketTimeoutException) {
-                kind = "\u8fde\u63a5\u8d85\u65f6\uff08\u7f51\u7edc\u95ee\u9898\uff0c\u4e0d\u5224\u5b9a Cookie\uff09";
-            } else {
-                kind = "\u7f51\u7edc\u4e0d\u53ef\u8fbe\uff08" + t.getClass().getSimpleName() + "\uff0c\u4e0d\u5224\u5b9a Cookie\uff09";
-            }
-            return new ProbeResult(endpoint, VERDICT_WARN, -1, kind, "");
+            return new RawFetch(-1, null, "", t);
         } finally {
             if (conn != null) {
                 try {
@@ -1109,6 +1092,17 @@ public class MainActivity extends Activity {
                 }
             }
         }
+    }
+
+    private String networkErrorKind(Throwable t) {
+        if (t instanceof java.net.UnknownHostException) {
+            return "\u57df\u540d\u65e0\u6cd5\u89e3\u6790\uff08DNS/\u7f51\u7edc\u95ee\u9898\uff0c\u4e0d\u5224\u5b9a Cookie\uff09";
+        }
+        if (t instanceof java.net.SocketTimeoutException) {
+            return "\u8fde\u63a5\u8d85\u65f6\uff08\u7f51\u7edc\u95ee\u9898\uff0c\u4e0d\u5224\u5b9a Cookie\uff09";
+        }
+        return "\u7f51\u7edc\u4e0d\u53ef\u8fbe\uff08" + (t == null ? "unknown" : t.getClass().getSimpleName())
+                + "\uff0c\u4e0d\u5224\u5b9a Cookie\uff09";
     }
 
     private void renderProbeResults(List<ProbeResult> results) {
@@ -1155,22 +1149,32 @@ public class MainActivity extends Activity {
         }
         StringBuilder agg = new StringBuilder();
         if (bad > 0) {
-            agg.append("\u7ed3\u8bba\uff1a\u68c0\u6d4b\u5230\u670d\u52a1\u7aef\u8981\u6c42\u91cd\u65b0\u767b\u5f55/\u62d2\u7edd\uff08\u89c1\u4e0a\u65b9\u7ea2\u8272\u9879\uff09\u3002\u5f53\u524d Cookie \u53ef\u80fd\u65e0\u6548\u3001\u5df2\u8fc7\u671f\u6216\u7f3a\u5c11 STS\uff08serviceToken\uff09\u3002"
-                    + "\u5efa\u8bae\uff1a\u7528\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\u91cd\u65b0\u767b\u5f55\u540e\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\uff0c\u6216\u4f7f\u7528\u300c\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u300d\u7684 Cookie \u540e\u91cd\u8bd5\u3002");
+            agg.append("\u7ed3\u8bba\uff1a\u68c0\u6d4b\u5230\u670d\u52a1\u7aef\u8981\u6c42\u91cd\u65b0\u767b\u5f55/\u62d2\u7edd\uff08\u89c1\u4e0a\u65b9\u7ea2\u8272\u9879\uff09\u3002"
+                    + "\u5f53\u524d Cookie \u53ef\u80fd\u65e0\u6548\u3001\u5df2\u8fc7\u671f\u6216\u7f3a\u5c11 STS\uff08serviceToken\uff09\u3002");
             if (warn > 0) {
-                agg.append("\n\u53e6\u6709 ").append(warn).append(" \u4e2a\u7aef\u70b9\u4e0d\u786e\u5b9a\uff08\u7f51\u7edc/\u53c2\u6570\u95ee\u9898\uff09\uff0c\u4e0d\u5f71\u54cd\u4e0a\u8ff0\u5224\u65ad\u3002");
+                agg.append("\n\u53e6\u6709 ").append(warn).append(" \u4e2a\u7aef\u70b9\u4e0d\u786e\u5b9a\uff08\u7f51\u7edc/\u53c2\u6570\u95ee\u9898\uff09\uff0c\u4e0d\u5f71\u54cd\u5224\u65ad\u3002");
             }
         } else if (ok > 0 && warn == 0) {
-            agg.append("\u7ed3\u8bba\uff1a\u672a\u51fa\u73b0\u8981\u6c42\u91cd\u65b0\u767b\u5f55\u7684\u8ff9\u8c61 \u2192 \u5f53\u524d Cookie \u53ef\u80fd\u6709\u6548\uff08\u4ecd\u4ee5\u5b9e\u9645\u4e91\u7aef\u4efb\u52a1\u662f\u5426\u6210\u529f\u4e3a\u51c6\uff09\u3002");
+            agg.append("\u7ed3\u8bba\uff1a\u672a\u51fa\u73b0\u8981\u6c42\u91cd\u65b0\u767b\u5f55\u7684\u8ff9\u8c61 \u2192 \u5f53\u524d Cookie \u53ef\u80fd\u6709\u6548"
+                    + "\uff08\u4ecd\u4ee5\u5b9e\u9645\u4e91\u7aef\u4efb\u52a1\u662f\u5426\u6210\u529f\u4e3a\u51c6\uff09\u3002");
         } else if (ok > 0) {
             agg.append("\u7ed3\u8bba\uff1a\u6709\u7aef\u70b9\u672a\u88ab\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff0c\u53e6\u6709 ").append(warn)
-                    .append(" \u4e2a\u7aef\u70b9\u4e0d\u786e\u5b9a\uff08\u7f51\u7edc/\u53c2\u6570\u95ee\u9898\uff09\u3002\u672a\u53d1\u73b0\u660e\u786e\u62d2\u7edd\u8ff9\u8c61\uff0c\u5fc5\u8981\u65f6\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5\u3002");
+                    .append(" \u4e2a\u7aef\u70b9\u4e0d\u786e\u5b9a\uff08\u7f51\u7edc/\u53c2\u6570\u95ee\u9898\uff09\u3002");
         } else {
-            agg.append("\u7ed3\u8bba\uff1a\u65e0\u6cd5\u5224\u5b9a\uff08\u7f51\u7edc\u4e0d\u53ef\u8fbe\u6216\u7aef\u70b9\u53c2\u6570\u4e0d\u8db3\uff09\u3002\u8fd9\u4e0d\u4ee3\u8868 Cookie \u65e0\u6548\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc/\u7a0d\u540e\u91cd\u8bd5\uff0c"
-                    + "\u6216\u76f4\u63a5\u5728\u76f8\u518c\u7f16\u8f91\u4e2d\u5b9e\u6d4b\u4e91\u7aef\u529f\u80fd\u3002");
+            agg.append("\u7ed3\u8bba\uff1a\u65e0\u6cd5\u5224\u5b9a\uff08\u7f51\u7edc\u4e0d\u53ef\u8fbe\u6216\u7aef\u70b9\u53c2\u6570\u4e0d\u8db3\uff09\u3002\u8fd9\u4e0d\u4ee3\u8868 Cookie \u65e0\u6548\u3002");
         }
-        agg.append("\n\u6ce8\u610f\uff1a\u672c\u68c0\u6d4b\u4ec5\u9a8c\u8bc1 Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b\u4e91\u7aef\u6743\u76ca\uff08\u70b9\u6570/\u8bbe\u5907\u767d\u540d\u5355/\u786c\u4ef6\u8ba4\u8bc1 token\uff09\u7531\u5c0f\u7c73\u670d\u52a1\u7aef\u6821\u9a8c\uff0c"
-                + "\u65e0\u6cd5\u901a\u8fc7\u672c\u68c0\u6d4b\u9a8c\u8bc1\u3002\u63a2\u6d4b\u7aef\u70b9\u4e3a\u53ea\u8bfb GET\uff0c\u53ef\u80fd\u968f\u670d\u52a1\u7aef\u8c03\u6574\u3002");
+        if (bad > 0 && !ModuleConfig.MODE_CAPTURED.equals(cookieMode) && !capturedCookie().isEmpty()) {
+            agg.append("\n\u63d0\u793a\uff1a\u7f51\u9875/\u624b\u52a8 Cookie \u53ef\u80fd\u4e0d\u88ab\u4e91 API \u63a5\u53d7\uff08\u5e38\u89c1 HTTP 401\uff09\u3002"
+                    + "\u68c0\u6d4b\u5230\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u7684 STS Cookie\uff0c\u5efa\u8bae\u628a\u300cCookie \u6765\u6e90\u300d\u5207\u6362\u4e3a"
+                    + "\u300c\u7cfb\u7edf\u6355\u83b7\u300d\u6216\u300c\u81ea\u52a8\u300d\uff0c\u6216\u70b9\u300c\u586b\u5165\u6355\u83b7\u7684 Cookie\u300d\u540e\u91cd\u8bd5\u3002");
+        }
+        if (bad > 0 && ModuleConfig.MODE_CAPTURED.equals(cookieMode)) {
+            agg.append("\n\u63d0\u793a\uff1a\u7cfb\u7edf\u6355\u83b7\u7684 STS Cookie \u4e5f\u88ab\u62d2\u7edd\u65f6\uff0c\u53ef\u5c1d\u8bd5\u91cd\u65b0\u767b\u5f55\u7cfb\u7edf\u5c0f\u7c73\u8d26\u53f7"
+                    + "\u540e\u518d\u6b21\u6355\u83b7\uff1b\u4e91\u7aef\u6743\u76ca\u95ee\u9898\u4ecd\u9700\u670d\u52a1\u7aef\u4fa7\u89e3\u51b3\u3002");
+        }
+        agg.append("\n\u6ce8\u610f\uff1a\u672c\u68c0\u6d4b\u4ec5\u9a8c\u8bc1 Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b\u4e91\u7aef\u6743\u76ca\uff08\u70b9\u6570/\u8bbe\u5907\u767d\u540d\u5355/"
+                + "\u786c\u4ef6\u8ba4\u8bc1 token\uff09\u7531\u5c0f\u7c73\u670d\u52a1\u7aef\u6821\u9a8c\uff0c\u65e0\u6cd5\u901a\u8fc7\u672c\u68c0\u6d4b\u9a8c\u8bc1\u3002"
+                + "\u63a2\u6d4b\u7aef\u70b9\u4e3a\u53ea\u8bfb GET\uff0c\u53ef\u80fd\u968f\u670d\u52a1\u7aef\u8c03\u6574\u3002");
         probeAggregate.setText(agg.toString());
     }
 
@@ -1227,7 +1231,7 @@ public class MainActivity extends Activity {
                 || lower.contains("\"code\":70016") || containsLoginMarker(body);
     }
 
-    /** True for internal-API parameter errors (missing required args); these carry no auth signal. */
+    /** True for internal-API parameter errors (missing required args); no auth signal. */
     private boolean looksLikeParamError(String body) {
         if (body == null || body.isEmpty()) {
             return false;
@@ -1282,7 +1286,7 @@ public class MainActivity extends Activity {
     // State / config
     // ------------------------------------------------------------------
 
-    private String currentCookie() {
+    private String manualCookie() {
         try {
             if (cookieEdit != null) {
                 return cookieEdit.getText().toString().trim();
@@ -1293,10 +1297,83 @@ public class MainActivity extends Activity {
         }
     }
 
+    private String capturedCookie() {
+        try {
+            return ModuleConfig.prefs(this)
+                    .getString(ModuleConfig.KEY_CAPTURED_COOKIE, "").trim();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** Same precedence as HookEntry injection: manual -> captured for auto. */
+    private String effectiveCookie() {
+        String manual = manualCookie();
+        String captured = capturedCookie();
+        if (ModuleConfig.MODE_MANUAL.equals(cookieMode)) {
+            return manual;
+        }
+        if (ModuleConfig.MODE_CAPTURED.equals(cookieMode)) {
+            return captured;
+        }
+        return manual.isEmpty() ? captured : manual;
+    }
+
+    private String effectiveSourceLabel() {
+        String manual = manualCookie();
+        String captured = capturedCookie();
+        if (ModuleConfig.MODE_MANUAL.equals(cookieMode)) {
+            return manual.isEmpty() ? "\u624b\u52a8 / \u7f51\u9875 Cookie\uff08\u672a\u914d\u7f6e\uff09" : "\u624b\u52a8 / \u7f51\u9875 Cookie";
+        }
+        if (ModuleConfig.MODE_CAPTURED.equals(cookieMode)) {
+            return captured.isEmpty() ? "\u7cfb\u7edf\u6355\u83b7\uff08\u5c1a\u672a\u6355\u83b7\uff09" : "\u7cfb\u7edf\u6355\u83b7\uff08STS Cookie\uff09";
+        }
+        if (!manual.isEmpty()) {
+            return "\u81ea\u52a8 \u2192 \u624b\u52a8 / \u7f51\u9875 Cookie";
+        }
+        if (!captured.isEmpty()) {
+            return "\u81ea\u52a8 \u2192 \u7cfb\u7edf\u6355\u83b7\uff08STS Cookie\uff09";
+        }
+        return "\u81ea\u52a8\uff08\u6682\u65e0\u53ef\u7528 Cookie\uff09";
+    }
+
+    private String modeLabel(String mode) {
+        if (ModuleConfig.MODE_MANUAL.equals(mode)) {
+            return "\u624b\u52a8 / \u7f51\u9875 Cookie";
+        }
+        if (ModuleConfig.MODE_CAPTURED.equals(mode)) {
+            return "\u7cfb\u7edf\u6355\u83b7\uff08STS Cookie\uff09";
+        }
+        return "\u81ea\u52a8\uff08\u63a8\u8350\uff09";
+    }
+
+    private void setCookieMode(String mode) {
+        cookieMode = mode;
+        try {
+            ModuleConfig.prefs(this).edit()
+                    .putString(ModuleConfig.KEY_COOKIE_MODE, mode).apply();
+        } catch (Throwable ignored) {
+        }
+        updateOverview();
+        updateInspector();
+        updateStatusPill();
+        updateProbeUiState();
+    }
+
     private void loadConfig() {
         SharedPreferences p = ModuleConfig.prefs(this);
+        cookieMode = p.getString(ModuleConfig.KEY_COOKIE_MODE, ModuleConfig.MODE_AUTO);
         if (cookieEdit != null) {
             cookieEdit.setText(p.getString(ModuleConfig.KEY_COOKIE, ""));
+        }
+        if (rbAuto != null) {
+            rbAuto.setChecked(ModuleConfig.MODE_AUTO.equals(cookieMode));
+        }
+        if (rbManual != null) {
+            rbManual.setChecked(ModuleConfig.MODE_MANUAL.equals(cookieMode));
+        }
+        if (rbCaptured != null) {
+            rbCaptured.setChecked(ModuleConfig.MODE_CAPTURED.equals(cookieMode));
         }
         if (cbGate != null) {
             cbGate.setChecked(p.getBoolean(ModuleConfig.KEY_ENABLE_GATE_BYPASS,
@@ -1328,18 +1405,24 @@ public class MainActivity extends Activity {
             return;
         }
         boolean gate = cbGate != null && cbGate.isChecked();
-        String cookie = currentCookie();
-        boolean hasSts = hasCookieKey(cookie, "serviceToken");
+        String effective = effectiveCookie();
+        boolean hasSts = hasCookieKey(effective, "serviceToken");
         gateRow.setText(gate ? "\u5df2\u542f\u7528" : "\u5df2\u5173\u95ed");
         gateRow.setTextColor(gate ? colorGreen : colorRed);
-        cookieRow.setText(cookie.isEmpty() ? "\u672a\u914d\u7f6e" : ("\u5df2\u914d\u7f6e\uff08" + cookie.length() + " \u5b57\u7b26\uff09"));
-        cookieRow.setTextColor(cookie.isEmpty() ? colorYellow : colorGreen);
-        if (cookie.isEmpty()) {
+        cookieRow.setText(effective.isEmpty()
+                ? "\u672a\u914d\u7f6e"
+                : ("\u5df2\u914d\u7f6e\uff08" + effective.length() + " \u5b57\u7b26 \u00b7 " + briefSource() + "\uff09"));
+        cookieRow.setTextColor(effective.isEmpty() ? colorYellow : colorGreen);
+        if (effective.isEmpty()) {
             stsRow.setText("\u2014");
             stsRow.setTextColor(colorTextDim);
         } else {
             stsRow.setText(hasSts ? "\u542b serviceToken" : "\u7f3a\u5c11 serviceToken\uff08Web Cookie\uff09");
             stsRow.setTextColor(hasSts ? colorGreen : colorYellow);
+        }
+        if (effectiveSourceView != null) {
+            effectiveSourceView.setText("\u5f53\u524d\u751f\u6548\u6765\u6e90\uff1a" + effectiveSourceLabel());
+            effectiveSourceView.setTextColor(effective.isEmpty() ? colorYellow : colorAccent);
         }
         if (probing) {
             probeRow.setText("\u68c0\u6d4b\u4e2d\u2026");
@@ -1355,6 +1438,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    private String briefSource() {
+        String manual = manualCookie();
+        String captured = capturedCookie();
+        if (ModuleConfig.MODE_CAPTURED.equals(cookieMode)) {
+            return "\u7cfb\u7edf\u6355\u83b7";
+        }
+        if (ModuleConfig.MODE_MANUAL.equals(cookieMode)) {
+            return "\u624b\u52a8/\u7f51\u9875";
+        }
+        return manual.isEmpty() ? "\u7cfb\u7edf\u6355\u83b7" : "\u624b\u52a8/\u7f51\u9875";
+    }
+
     private int worstLevel(List<ProbeResult> results) {
         int worst = VERDICT_OK;
         for (int i = 0; i < results.size(); i++) {
@@ -1367,29 +1462,74 @@ public class MainActivity extends Activity {
         if (inspectorChips == null || inspectorSummary == null) {
             return;
         }
-        inspectorChips.removeAllViews();
-        String cookie = currentCookie();
+        String manual = manualCookie();
+        String captured = capturedCookie();
+        String effective = effectiveCookie();
+
+        boolean manualActive;
+        boolean capturedActive;
+        if (ModuleConfig.MODE_MANUAL.equals(cookieMode)) {
+            manualActive = !manual.isEmpty();
+            capturedActive = false;
+        } else if (ModuleConfig.MODE_CAPTURED.equals(cookieMode)) {
+            manualActive = false;
+            capturedActive = !captured.isEmpty();
+        } else if (!manual.isEmpty()) {
+            manualActive = true;
+            capturedActive = false;
+        } else {
+            manualActive = false;
+            capturedActive = !captured.isEmpty();
+        }
+
+        fillComposition(inspectorChips, manual);
+        inspectorSummary.setText("\u624b\u52a8 / \u7f51\u9875 Cookie\uff1a"
+                + pairCount(manual) + " \u4e2a\u952e\uff0c" + manual.length() + " \u5b57\u7b26\uff08"
+                + (manualActive ? "\u5f53\u524d\u751f\u6548" : "\u672a\u751f\u6548") + "\uff09\u3002");
+
+        fillComposition(capturedChips, captured);
+        if (capturedSummary != null) {
+            capturedSummary.setText("\u7cfb\u7edf\u6355\u83b7\uff1a" + pairCount(captured) + " \u4e2a\u952e\uff0c"
+                    + captured.length() + " \u5b57\u7b26\uff08"
+                    + (capturedActive ? "\u5f53\u524d\u751f\u6548" : "\u672a\u751f\u6548") + "\uff09\u3002");
+        }
+
+        boolean missingSts = !effective.isEmpty() && !hasCookieKey(effective, "serviceToken");
+        if (stsWarning != null) {
+            if (missingSts) {
+                stsWarning.setVisibility(View.VISIBLE);
+                stsWarning.setText("\u26a0 \u5f53\u524d\u751f\u6548 Cookie \u672a\u68c0\u6d4b\u5230 serviceToken\uff1a\u7f51\u9875 Cookie "
+                        + "\u53ef\u80fd\u4e0d\u88ab\u4e91 API \u63a5\u53d7\uff08\u5e38\u89c1 HTTP 401\uff09\u3002\u5efa\u8bae\u7528\u300c\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u300d"
+                        + "\u7684 STS Cookie\uff0c\u6216\u5728\u5168\u5c4f\u767b\u5f55\u9875\u5b8c\u6210 i.mi.com STS \u540e\u91cd\u65b0\u8bfb\u53d6\u3002");
+            } else {
+                stsWarning.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    private int pairCount(String cookie) {
+        return parseCookie(cookie).size();
+    }
+
+    private void fillComposition(LinearLayout container, String cookie) {
+        if (container == null) {
+            return;
+        }
+        container.removeAllViews();
         LinkedHashMap<String, String> pairs = parseCookie(cookie);
         List<TextView> row = new ArrayList<TextView>();
         int presentKnown = 0;
         for (int i = 0; i < KNOWN_COOKIE_KEYS.length; i++) {
             String key = KNOWN_COOKIE_KEYS[i];
-            String found = findKey(pairs, key);
-            boolean present = found != null;
+            boolean present = findKey(pairs, key) != null;
             if (present) {
                 presentKnown++;
                 row.add(chip(key + " \u2713", VERDICT_OK));
             } else {
-                int level;
-                if ("serviceToken".equals(key) || "passToken".equals(key)) {
-                    level = VERDICT_WARN;
-                } else {
-                    level = VERDICT_WARN;
-                }
-                row.add(chip(key + " \u2717", level));
+                row.add(chip(key + " \u2717", VERDICT_WARN));
             }
             if (row.size() == 3) {
-                addChipRow(inspectorChips, row);
+                addChipRow(container, row);
                 row = new ArrayList<TextView>();
             }
         }
@@ -1398,59 +1538,7 @@ public class MainActivity extends Activity {
             row.add(chip("\u5176\u4ed6 " + other + " \u4e2a\u952e", VERDICT_OK));
         }
         if (!row.isEmpty()) {
-            addChipRow(inspectorChips, row);
-        }
-        if (cookie.isEmpty()) {
-            inspectorSummary.setText("\u5c1a\u672a\u914d\u7f6e Cookie\u3002\u53ef\u7f51\u9875\u767b\u5f55\u540e\u8bfb\u53d6\u3001\u624b\u52a8\u7c98\u8d34\uff0c"
-                    + "\u6216\u4f7f\u7528\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u7684 Cookie\u3002");
-        } else {
-            inspectorSummary.setText("\u5171 " + pairs.size() + " \u4e2a\u952e\uff0c" + cookie.length()
-                    + " \u5b57\u7b26\uff08\u4ec5\u663e\u793a\u952e\u540d\uff0c\u4e0d\u663e\u793a\u4ee4\u724c\u503c\uff09\u3002");
-        }
-        boolean missingSts = !cookie.isEmpty() && findKey(pairs, "serviceToken") == null;
-        if (stsWarning != null) {
-            if (missingSts) {
-                stsWarning.setVisibility(View.VISIBLE);
-                stsWarning.setText("\u26a0 \u672a\u68c0\u6d4b\u5230 serviceToken\uff1aWebView \u767b\u5f55\u5f97\u5230\u7684\u662f\u7f51\u9875 Cookie\uff0c"
-                        + "\u4e91 API \u53ef\u80fd\u9700\u8981 STS Cookie\uff08serviceToken\uff09\u3002\u8bf7\u70b9\u300c\u53bb i.mi.com \u5b8c\u6210 STS\u300d"
-                        + "\u540e\u91cd\u65b0\u8bfb\u53d6\uff0c\u6216\u4f7f\u7528\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u7684 Cookie\u3002");
-            } else {
-                stsWarning.setVisibility(View.GONE);
-            }
-        }
-    }
-
-    private void updateStatusPill() {
-        if (statusPill == null) {
-            return;
-        }
-        boolean gate = cbGate != null && cbGate.isChecked();
-        String cookie = currentCookie();
-        String probeText;
-        int pillColor;
-        if (probing) {
-            probeText = "\u4f53\u68c0:\u68c0\u6d4b\u4e2d";
-            pillColor = colorAccent;
-        } else if (lastProbe.isEmpty()) {
-            probeText = "\u4f53\u68c0:\u672a\u68c0\u6d4b";
-            pillColor = cookie.isEmpty() ? colorYellow : colorAccent;
-        } else {
-            int worst = worstLevel(lastProbe);
-            probeText = worst == VERDICT_OK ? "\u4f53\u68c0:\u901a\u8fc7"
-                    : (worst == VERDICT_WARN ? "\u4f53\u68c0:\u90e8\u5206\u5f02\u5e38" : "\u4f53\u68c0:\u5f02\u5e38");
-            pillColor = colorForLevel(worst);
-        }
-        String textValue = "\u95e8\u7981:" + (gate ? "\u5f00" : "\u5173")
-                + " \u00b7 Cookie:" + (cookie.isEmpty() ? "\u672a\u914d\u7f6e" : "\u5df2\u914d\u7f6e")
-                + " \u00b7 " + probeText;
-        statusPill.setText(textValue);
-        statusPill.setContentDescription("\u72b6\u6001\uff1a" + textValue);
-        statusPill.setBackground(roundBg(pillColor, dp(16), pillColor));
-    }
-
-    private void updateProbeUiState() {
-        if (probeButton != null) {
-            probeButton.setEnabled(!probing && !currentCookie().isEmpty());
+            addChipRow(container, row);
         }
     }
 
@@ -1458,15 +1546,11 @@ public class MainActivity extends Activity {
         if (capturedView == null) {
             return;
         }
-        String captured = "";
-        try {
-            captured = ModuleConfig.prefs(this).getString(ModuleConfig.KEY_CAPTURED_COOKIE, "");
-        } catch (Throwable ignored) {
-        }
-        if (captured == null || captured.isEmpty()) {
+        String captured = capturedCookie();
+        if (captured.isEmpty()) {
             capturedView.setText("\u5c1a\u672a\u6355\u83b7\u3002\u9700\u5148\u5728\u7cfb\u7edf\u8bbe\u7f6e\u91cc\u767b\u5f55\u5c0f\u7c73\u8d26\u53f7"
                     + "\u2192 \u6253\u5f00\u76f8\u518c\u7f16\u8f91\u5e76\u89e6\u53d1\u4e00\u6b21\u4e91\u7aef\u8bf7\u6c42\uff1b"
-                    + "LSPosed \u6302\u94a9\u8fdb\u7a0b\u4f1a\u628a App \u81ea\u5df1\u53d6\u5230\u7684 Cookie \u81ea\u52a8\u4fdd\u5b58\u5230\u8fd9\u91cc\u3002");
+                    + "LSPosed \u6302\u94a9\u8fdb\u7a0b\u4f1a\u628a App \u81ea\u5df1\u53d6\u5230\u7684 STS Cookie \u81ea\u52a8\u4fdd\u5b58\u5230\u8fd9\u91cc\u3002");
             return;
         }
         LinkedHashMap<String, String> pairs = parseCookie(captured);
@@ -1484,7 +1568,41 @@ public class MainActivity extends Activity {
         capturedView.setText("\u5df2\u6355\u83b7\uff08" + captured.length() + " \u5b57\u7b26\uff09\uff0c\u952e\uff1a"
                 + (keys.length() == 0 ? "\u2014" : keys.toString())
                 + "\n\u4e3a\u5b89\u5168\u8d77\u89c1\u4e0d\u76f4\u63a5\u663e\u793a\u4ee4\u724c\u503c\uff1b"
-                + "\u70b9\u300c\u586b\u5165\u6355\u83b7\u7684 Cookie\u300d\u53ef\u5c06\u5b8c\u6574 Cookie \u5199\u5165\u4e0a\u65b9\u8f93\u5165\u6846\u3002");
+                + "\u70b9\u300c\u586b\u5165\u6355\u83b7\u7684 Cookie\u300d\u53ef\u5c06\u5b8c\u6574 Cookie \u5199\u5165\u624b\u52a8\u8f93\u5165\u6846\u3002");
+    }
+
+    private void updateStatusPill() {
+        if (statusPill == null) {
+            return;
+        }
+        boolean gate = cbGate != null && cbGate.isChecked();
+        String effective = effectiveCookie();
+        String cookieText = effective.isEmpty() ? "Cookie:\u672a\u914d\u7f6e" : "Cookie:\u5df2\u914d\u7f6e";
+        String probeText;
+        int pillColor;
+        if (probing) {
+            probeText = "\u4f53\u68c0:\u68c0\u6d4b\u4e2d";
+            pillColor = colorAccent;
+        } else if (lastProbe.isEmpty()) {
+            probeText = "\u4f53\u68c0:\u672a\u68c0\u6d4b";
+            pillColor = effective.isEmpty() ? colorYellow : colorAccent;
+        } else {
+            int worst = worstLevel(lastProbe);
+            probeText = worst == VERDICT_OK ? "\u4f53\u68c0:\u901a\u8fc7"
+                    : (worst == VERDICT_WARN ? "\u4f53\u68c0:\u90e8\u5206\u5f02\u5e38" : "\u4f53\u68c0:\u5f02\u5e38");
+            pillColor = colorForLevel(worst);
+        }
+        String textValue = "\u95e8\u7981:" + (gate ? "\u5f00" : "\u5173")
+                + " \u00b7 " + cookieText + " \u00b7 " + probeText;
+        statusPill.setText(textValue);
+        statusPill.setContentDescription("\u72b6\u6001\uff1a" + textValue + "\uff1b\u6765\u6e90\uff1a" + effectiveSourceLabel());
+        statusPill.setBackground(roundBg(pillColor, dp(16), pillColor));
+    }
+
+    private void updateProbeUiState() {
+        if (probeButton != null) {
+            probeButton.setEnabled(!probing && !effectiveCookie().isEmpty());
+        }
     }
 
     private void setActionStatus(String textValue) {
@@ -1495,7 +1613,7 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------
-    // Cookie parsing / capture
+    // Cookie parsing
     // ------------------------------------------------------------------
 
     private LinkedHashMap<String, String> parseCookie(String cookie) {
@@ -1535,51 +1653,8 @@ public class MainActivity extends Activity {
         return findKey(parseCookie(cookie), wanted) != null;
     }
 
-    private String captureCookie() {
-        LinkedHashMap<String, String> merged = new LinkedHashMap<String, String>();
-        CookieManager cm = CookieManager.getInstance();
-        for (int i = 0; i < COOKIE_URLS.length; i++) {
-            String raw = null;
-            try {
-                raw = cm.getCookie(COOKIE_URLS[i]);
-            } catch (Throwable t) {
-                Log.w(TAG, "getCookie failed for " + COOKIE_URLS[i] + ": " + t);
-            }
-            if (raw == null || raw.isEmpty()) {
-                continue;
-            }
-            String[] parts = raw.split(";");
-            for (int j = 0; j < parts.length; j++) {
-                String part = parts[j].trim();
-                if (part.isEmpty()) {
-                    continue;
-                }
-                int eq = part.indexOf('=');
-                if (eq <= 0 || eq >= part.length() - 1) {
-                    continue;
-                }
-                String name = part.substring(0, eq).trim();
-                String value = part.substring(eq + 1).trim();
-                if (name.isEmpty() || value.isEmpty()) {
-                    continue;
-                }
-                if (!merged.containsKey(name)) {
-                    merged.put(name, value);
-                }
-            }
-        }
-        StringBuilder sb = new StringBuilder();
-        for (Map.Entry<String, String> entry : merged.entrySet()) {
-            if (sb.length() > 0) {
-                sb.append("; ");
-            }
-            sb.append(entry.getKey()).append('=').append(entry.getValue());
-        }
-        return sb.toString();
-    }
-
     // ------------------------------------------------------------------
-    // Probe result holder
+    // Result holders
     // ------------------------------------------------------------------
 
     private static final class ProbeResult {
@@ -1598,43 +1673,64 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static final class RawFetch {
+        final int code;
+        final String location;
+        final String body;
+        final Throwable error;
+
+        RawFetch(int code, String location, String body, Throwable error) {
+            this.code = code;
+            this.location = location;
+            this.body = body == null ? "" : body;
+            this.error = error;
+        }
+
+        boolean hasError() {
+            return error != null;
+        }
+    }
+
     // ------------------------------------------------------------------
     // Help text
     // ------------------------------------------------------------------
 
     private static String buildHelpText() {
         StringBuilder sb = new StringBuilder();
-        sb.append("\u3010\u4f7f\u7528\u6b65\u9aa4\u3011\n");
-        sb.append("1. \u5b89\u88c5\u672c APK \u540e\u6253\u5f00 LSPosed \u7ba1\u7406\u5668 \u2192\u300c\u6a21\u5757\u300d\u2192 \u542f\u7528\u300c\u5f95\u5361\u4e00\u77ac LSPosed\u300d\u3002\n");
-        sb.append("2. \u4f5c\u7528\u57df\uff1acom.miui.mediaeditor\uff08\u5fc5\u9009\uff0c\u7f16\u8f91\u5668\uff09\uff1b"
-                + "\u82e5\u4f7f\u7528\u76f8\u673a\u300c\u5f95\u5361\u4e00\u77ac\u300d\u518d\u52fe\u9009 com.android.camera\uff1b"
-                + "com.miui.gallery \u53ef\u9009\u3002\u4fdd\u5b58\u540e\u5efa\u8bae\u91cd\u542f\u624b\u673a\u4e00\u6b21\u3002\n");
-        sb.append("3. Cookie\uff1a\u4efb\u9009\u4e00\u79cd\u6765\u6e90\uff1a\n");
-        sb.append("   a) \u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\uff1ai.mi.com \u4f1a\u81ea\u52a8\u8df3\u8f6c"
-                + "\u8d26\u53f7\u767b\u5f55\u5e76\u5b8c\u6210 STS\uff0c\u5b8c\u6210\u540e\u70b9\u300c\u8bfb\u53d6\u767b\u5f55 Cookie\u300d\uff1b\n");
-        sb.append("   b) \u624b\u52a8\u7c98\u8d34 Cookie\uff1b\n");
-        sb.append("   c) \u7cfb\u7edf\u8d26\u53f7\u767b\u5f55\u540e\u6253\u5f00\u76f8\u518c\u2192\u7f16\u8f91\u89e6\u53d1\u4e00\u6b21\u4e91\u7aef\u8bf7\u6c42\uff0c"
-                + "\u6a21\u5757\u81ea\u52a8\u6355\u83b7 App \u53d6\u5230\u7684 STS Cookie\uff0c\u518d\u70b9\u300c\u586b\u5165\u6355\u83b7\u7684 Cookie\u300d\u3002\n");
-        sb.append("4. \u70b9\u300c\u4fdd\u5b58\u8bbe\u7f6e\u300d\u3002\u4fee\u6539 Cookie/\u5f00\u5173\u540e\u8bf7\u5230\u7cfb\u7edf\u8bbe\u7f6e \u2192 \u5e94\u7528 \u2192 "
-                + "\u300c\u76f8\u518c\u300d/\u300c\u5a92\u4f53\u7f16\u8f91\u5668\u300d/\u300c\u76f8\u673a\u300d\u2192 \u5f3a\u5236\u505c\u6b62\u540e\u91cd\u5f00\u3002\n");
-        sb.append("5. \u53ef\u9009\uff1a\u70b9\u300c\u68c0\u6d4b Cookie \u6709\u6548\u6027\u300d\u505a\u53ea\u8bfb GET \u4f53\u68c0\uff08\u4e0d\u6d88\u8017\u914d\u989d\uff09\u3002\n\n");
-        sb.append("\u3010\u8bf4\u660e\u4e0e\u9650\u5236\u3011\n");
-        sb.append("\u00b7 \u672c\u6a21\u5757\u4e3a\u300c\u65e0\u5c5e\u6027\u4f2a\u88c5\u300d\u6a21\u5f0f\uff1a\u4e0d\u4fee\u6539/\u4e0d\u4f2a\u88c5\u4efb\u4f55\u7cfb\u7edf\u5c5e\u6027\uff0c"
-                + "\u4e5f\u4e0d hook SystemProperties\u3002\u95e8\u7981\u89e3\u9501\u901a\u8fc7\u76f4\u63a5 hook App \u81ea\u8eab\u7684 Java \u5224\u5b9a\u65b9\u6cd5\u8fd4\u56de true\uff1a"
-                + "\u7f16\u8f91\u5668 CN rt.a.g()/ah0.b.g()\u3001GLOBAL mx.a.g()/r21.e.b()\uff1b\u76f8\u673a LegendaryEnter.support()\u3001Te.c.W()\u3001h5()\u3002\n");
+        sb.append("\u3010\u63a8\u8350\u6d41\u7a0b\u3011\n");
+        sb.append("1. \u5728\u7cfb\u7edf\u8bbe\u7f6e\u91cc\u767b\u5f55\u5c0f\u7c73\u8d26\u53f7\uff08\u6216\u70b9\u300c\u767b\u5f55\u7cfb\u7edf\u5c0f\u7c73\u8d26\u53f7\u300d\uff09\u3002\n");
+        sb.append("2. \u6253\u5f00\u76f8\u518c\u2192\u7f16\u8f91\u4e00\u6b21\u5e76\u89e6\u53d1\u4e91\u7aef/\u5f95\u5361\u529f\u80fd\uff0c"
+                + "\u6a21\u5757\u4f1a\u81ea\u52a8\u6355\u83b7 App \u81ea\u5df1\u53d6\u5230\u7684 STS Cookie\uff08\u7b2c\u2461\u8282\u7cfb\u7edf\u6355\u83b7\u533a\uff09\u3002\n");
+        sb.append("3. \u56de\u672c\u9875\uff1a\u4fdd\u6301\u300cCookie \u6765\u6e90\u300d\u4e3a\u300c\u81ea\u52a8\u300d\u6216\u5207\u4e3a\u300c\u7cfb\u7edf\u6355\u83b7\u300d\uff0c"
+                + "\u70b9\u300c\u4fdd\u5b58\u8bbe\u7f6e\u300d\u3002\u82e5\u624b\u52a8\u586b\u4e86\u7f51\u9875 Cookie\uff0c\u5efa\u8bae\u70b9\u300c\u586b\u5165\u6355\u83b7\u7684 Cookie\u300d\u6216\u5207\u6362\u6765\u6e90\u3002\n");
+        sb.append("4. \u6e05\u9664\u76f8\u518c\u80fd\u529b\u7f13\u5b58\uff08\u8bbe\u7f6e\u2192\u5e94\u7528\u2192\u76f8\u518c\u2192\u5b58\u50a8\u2192\u6e05\u9664\u7f13\u5b58/\u6570\u636e\uff09\uff0c"
+                + "\u5f3a\u5236\u505c\u6b62\u5a92\u4f53\u7f16\u8f91\u5668/\u76f8\u518c\u540e\u5b9e\u6d4b\u3002\n");
+        sb.append("5. \u7f51\u9875\u767b\u5f55\uff08\u5168\u5c4f\u767b\u5f55\u9875\uff09\u4ec5\u4f5c\u5907\u7528\uff1a\u7f51\u9875 Cookie \u5e38\u5e26 pass_ua=web\uff0c"
+                + "\u53ef\u80fd\u88ab\u4e91 API \u62d2\u7edd\uff08\u5e38\u89c1 HTTP 401\uff09\u3002\n\n");
+        sb.append("\u3010Cookie \u6765\u6e90\u4e0e\u6ce8\u5165\u3011\n");
+        sb.append("\u00b7 \u81ea\u52a8\uff08\u63a8\u8350\uff09\uff1a\u624b\u52a8/网页 Cookie \u4f18\u5148\uff0c\u4e3a\u7a7a\u65f6\u81ea\u52a8\u4f7f\u7528\u7cfb\u7edf\u6355\u83b7\u7684 STS Cookie\u3002\n");
+        sb.append("\u00b7 \u7cfb\u7edf\u6355\u83b7\uff1aApp \u81ea\u5df1\u901a\u8fc7\u5c0f\u7c73\u8d26\u53f7\u62ff\u5230\u7684 STS Cookie\uff08\u6700\u53ef\u9760\uff0c"
+                + "\u542b hyperos_sec_common_* / serviceToken\uff09\uff1b\u767b\u5f55\u7cfb\u7edf\u8d26\u53f7 + \u76f8\u518c\u7f16\u8f91\u4e00\u6b21\u5373\u53ef\u81ea\u52a8\u83b7\u5f97\uff0c\u65e0\u9700\u624b\u52a8\u64cd\u4f5c\u3002\n");
+        sb.append("\u00b7 \u624b\u52a8 / \u7f51\u9875\uff1a\u4ec5\u4f7f\u7528\u624b\u52a8\u6216\u5168\u5c4f\u7f51\u9875 Cookie\uff1b\u53ef\u80fd\u88ab\u4e91 API \u62d2\u7edd\uff08\u5e38\u89c1 401\uff09\u3002\n");
+        sb.append("\u00b7 Hook \u6ce8\u5165\u4f7f\u7528\u540c\u4e00\u4f18\u5148\u7ea7\uff08\u624b\u52a8\u4f18\u5148\uff0c\u5426\u5219\u7cfb\u7edf\u6355\u83b7\uff09\uff0c"
+                + "\u5e76\u540c\u6b65\u5199\u5165 App \u8fdb\u7a0b\u5185 Cookie \u7f13\u5b58\u5b57\u6bb5\uff1b\u4fee\u6539 Cookie/\u6765\u6e90\u540e\u8bf7\u5f3a\u5236\u505c\u6b62\u5bf9\u5e94 App\u3002\n\n");
+        sb.append("\u3010Cookie \u4f53\u68c0\u3011\n");
+        sb.append("\u00b7 \u4f7f\u7528\u5f53\u524d\u751f\u6548\u6765\u6e90\u7684 Cookie \u505a GET \u53ea\u8bfb\u63a2\u6d4b\uff08\u4e0d\u6d88\u8017\u914d\u989d\uff09\uff1b"
+                + "\u7f51\u9875 Cookie \u81ea\u52a8\u4f7f\u7528 Web UA\uff0cHTTP 401 \u65f6\u4f1a\u6362\u53e6\u4e00\u79cd UA \u91cd\u8bd5\u4e00\u6b21\uff0c\u7ed3\u679c\u6807\u6ce8 UA\u3002\n");
+        sb.append("\u00b7 \u4ec5\u9a8c\u8bc1 Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b\u4e91\u7aef\u6743\u76ca\uff08\u70b9\u6570/\u8bbe\u5907\u767d\u540d\u5355/\u786c\u4ef6\u8ba4\u8bc1 token\uff09"
+                + "\u4ecd\u7531\u5c0f\u7c73\u670d\u52a1\u7aef\u6821\u9a8c\u3002\n\n");
+        sb.append("\u3010\u5b89\u5168\u4e0e\u9690\u79c1\u3011\n");
         sb.append("\u00b7 Cookie \u4ec5\u4fdd\u5b58\u5728\u672c\u673a\u6a21\u5757\u79c1\u6709\u5b58\u50a8\uff1b\u6a21\u5757\u4e0d\u4e0a\u4f20\u3001\u4e0d\u8bb0\u5f55\u4ee4\u724c\u503c"
-                + "\uff08\u4e0b\u65b9\u4f53\u68c0\u4e5f\u53ea\u663e\u793a\u72b6\u6001/\u952e\u540d\uff09\u3002\u8bf7\u4e0d\u8981\u5c06 Cookie \u5206\u4eab\u7ed9\u4ed6\u4eba\u3002\n");
-        sb.append("\u00b7 Cookie \u4f53\u68c0\u4ec5\u9a8c\u8bc1 Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b\u4e91\u7aef\u6743\u76ca\uff08\u70b9\u6570/\u8bbe\u5907\u767d\u540d\u5355/"
-                + "\u786c\u4ef6\u8ba4\u8bc1 token\uff09\u4ecd\u7531\u5c0f\u7c73\u670d\u52a1\u7aef\u6821\u9a8c\u3002\n");
-        sb.append("\u00b7 WebView \u767b\u5f55\u5f97\u5230\u7684\u662f\u7f51\u9875 Cookie\uff0c\u53ef\u80fd\u4e0d\u542b serviceToken\uff1b"
-                + "\u8bf7\u5148\u70b9\u300c\u6253\u5f00 i.mi.com\uff08\u767b\u5f55+STS\uff09\u300d\u5b8c\u6210 STS\uff0c\u6216\u7528\u7cfb\u7edf\u8d26\u53f7\u6355\u83b7\u3002\n");
-        sb.append("\u00b7 \u7f16\u8f91\u5668\u4fa7\u65e0\u9700 Magisk\uff1b\u76f8\u673a\u300c\u5f95\u5361\u4e00\u77ac\u300d\u9700\u8981 Magisk CameraOnly "
-                + "\u53d8\u4f53\uff08\u4ec5\u53ea\u8bfb\u6302\u8f7d\u56fd\u884c MiuiCamera.apk\uff0c\u65e0\u5c5e\u6027\u4fee\u6539\uff09+ \u672c\u6a21\u5757\u3002\n");
-        sb.append("\u00b7 \u76f8\u673a\u9650\u5236\uff1a\u5382\u5546 HAL \u7684 legendary \u80fd\u529b\u4e0e\u8fd0\u884c\u65f6 legend_mode SDK "
-                + "\u4e0d\u80fd\u7531 Java hook \u6dfb\u52a0\uff0c\u82e5 HAL \u4e0d\u652f\u6301\u5219\u5165\u53e3\u53ef\u80fd\u51fa\u73b0\u4f46\u5b9e\u9645\u6548\u679c\u7f3a\u5931\u3002\n");
-        sb.append("\u00b7 \u82e5\u76f8\u518c\u4ecd\u4e0d\u663e\u793a\u5165\u53e3\uff1a\u9996\u6b21\u542f\u7528\u540e\u6e05\u9664\u76f8\u518c\u80fd\u529b\u7f13\u5b58\uff08\u8bbe\u7f6e\u2192\u5e94\u7528\u2192\u76f8\u518c\u2192"
-                + "\u5b58\u50a8\u2192\u6e05\u9664\u7f13\u5b58/\u6570\u636e\uff09\uff1b\u76f8\u518c\u4e3a Flutter+Rust\uff0cRust \u5c42\u4f1a\u7f13\u5b58\u65e7\u7ed3\u679c\u3002\n");
-        sb.append("\u00b7 CTA \u9690\u79c1\u534f\u8bae\u4e3a App \u6b63\u5e38\u5f39\u7a97\uff0c\u672c\u6a21\u5757\u6709\u610f\u4e0d\u5f3a\u5236\uff1b\u5165\u53e3\u663e\u793a\u53ea\u53d6\u51b3\u4e8e\u5224\u5b9a\u65b9\u6cd5\u3002\n");
+                + "\uff08\u754c\u9762\u4ec5\u663e\u793a\u952e\u540d/\u957f\u5ea6\uff0c\u4f53\u68c0\u7ed3\u679c\u5df2\u8131\u654f\uff09\u3002\u8bf7\u4e0d\u8981\u5c06 Cookie \u5206\u4eab\u7ed9\u4ed6\u4eba\u3002\n\n");
+        sb.append("\u3010\u5176\u4ed6\u9650\u5236\u3011\n");
+        sb.append("\u00b7 \u672c\u6a21\u5757\u4e3a\u300c\u65e0\u5c5e\u6027\u4f2a\u88c5\u300d\u6a21\u5f0f\uff1a\u4e0d\u4fee\u6539/\u4e0d\u4f2a\u88c5\u4efb\u4f55\u7cfb\u7edf\u5c5e\u6027\uff0c"
+                + "\u4e5f\u4e0d hook SystemProperties\u3002\u95e8\u7981\u89e3\u9501\u76f4\u63a5 hook App \u7684 Java \u5224\u5b9a\u65b9\u6cd5\u8fd4\u56de true\u3002\n");
+        sb.append("\u00b7 \u4f5c\u7528\u57df\uff1acom.miui.mediaeditor\uff08\u5fc5\u9009\uff09\uff1b\u76f8\u673a\u300c\u5f95\u5361\u4e00\u77ac\u300d\u9700\u52fe\u9009 com.android.camera "
+                + "\u5e76\u4f7f\u7528 Magisk CameraOnly \u53d8\u4f53\uff08\u4ec5\u53ea\u8bfb\u6302\u8f7d\u56fd\u884c MiuiCamera.apk\uff09\u3002\n");
+        sb.append("\u00b7 \u76f8\u518c\u4e3a Flutter+Rust\uff0cRust \u5c42\u4f1a\u7f13\u5b58\u65e7\u80fd\u529b\u7ed3\u679c\uff0c\u9996\u6b21\u542f\u7528\u540e\u9700\u6e05\u9664\u76f8\u518c\u7f13\u5b58/\u6570\u636e\u4e00\u6b21\u3002\n");
+        sb.append("\u00b7 \u76f8\u673a\u5382\u5546 HAL \u7684 legendary \u80fd\u529b\u4e0e\u8fd0\u884c\u65f6 legend_mode SDK \u65e0\u6cd5\u7531 Java hook \u6dfb\u52a0\uff1b"
+                + "\u82e5 HAL \u4e0d\u652f\u6301\uff0c\u5165\u53e3\u53ef\u80fd\u51fa\u73b0\u4f46\u5b9e\u9645\u6548\u679c\u7f3a\u5931\u3002\n");
+        sb.append("\u00b7 CTA \u9690\u79c1\u534f\u8bae\u4e3a App \u6b63\u5e38\u5f39\u7a97\uff0c\u672c\u6a21\u5757\u6709\u610f\u4e0d\u5f3a\u5236\u3002\n");
         sb.append("\u00b7 \u672c\u9879\u76ee\u4e3a\u79bb\u7ebf\u9006\u5411\u7814\u7a76\u7528\u9014\uff0c\u672a\u5728\u771f\u673a\u6d4b\u8bd5\uff0c\u8bf7\u81ea\u884c\u627f\u62c5\u98ce\u9669\u3002\n");
         return sb.toString();
     }
