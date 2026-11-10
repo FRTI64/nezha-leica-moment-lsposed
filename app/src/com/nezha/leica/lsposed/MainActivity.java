@@ -497,6 +497,9 @@ public class MainActivity extends Activity {
         sb.append("1. 安装本 APK 后打开 LSPosed 管理器 →「模块」→ 启用「徕卡一瞬 LSPosed」。\n");
         sb.append("2. 在模块作用域（勾选应用）中勾选：com.miui.mediaeditor（必选）、"
                 + "com.miui.gallery（可选）。保存后建议重启手机一次。\n");
+        sb.append("2.1 首次启用后建议清除相册能力缓存一次：设置→应用→相册→存储→"
+                + "清除缓存/清除数据（或 adb shell pm clear com.miui.gallery；会清除相册本地设置/缓存）。"
+                + "相册是 Flutter+Rust 应用，Rust 层会缓存“能力不可用”的旧结果。\n");
         sb.append("3. 任选一种 Cookie 来源：\n");
         sb.append("   a) 本页网页登录小米账号 → 点「读取登录Cookie」→ 点「保存设置」；\n");
         sb.append("   b) 手动粘贴 Cookie → 点「保存设置」；\n");
@@ -518,6 +521,9 @@ public class MainActivity extends Activity {
                 + "「二次增强」入口是否显示只取决于系统属性伪装，不需要绕过 CTA。\n");
         sb.append("· 设备未登录系统小米账号时，模块会 hook 上传前的登录探针（AccountUtil），"
                 + "用 Cookie 中的 userId/cUserId 作为账号标识，避免上传直接失败 “not login”。\n");
+        sb.append("· HyperOS 4 含大量 Rust 组件（相册为 Flutter+Rust，libapp_gallery.so 等），"
+                + "Xposed 只能 hook Java 侧；相册进程已额外安装系统属性伪装作为其 Java/JNI 属性桥的安全网，"
+                + "如需彻底覆盖 Rust/native 属性读取，请配合 Magisk props 模块（resetprop）。\n");
         sb.append("· 本项目为离线逆向研究用途，未在真机上测试，请自行承担风险。\n");
         sb.append("· 本模块不收集、不上传任何数据；Cookie 仅保存在本机模块私有目录。\n");
         return sb.toString();
