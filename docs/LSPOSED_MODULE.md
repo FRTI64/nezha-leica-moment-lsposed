@@ -1,10 +1,16 @@
-# LSPosed 模块 v2.2.0：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
+# LSPosed 模块 v2.2.1：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
 
 > 交付物：`out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.1.0.apk`（源：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.1.0.apk`；legacy Xposed 模块，LSPosed 可用）
-> 版本：`versionCode 6 / versionName 2.2.0`，37,476 B，sha256 `466ac66393a097d34272f322d2b47aef09aeebcf05ee7287a2a6a4c62669716b`（两次构建字节一致）
+> 版本：`versionCode 7 / versionName 2.2.1`，41,572 B，sha256 `197670bf99dba2a8679b2099d4af2785cd2781edd01ce0bac6473825dc4b3f75`（两次构建字节一致）
 > 目标：小米 17 Ultra（`nezha` / `nezha_global`），HyperOS 4 / Android 17；`com.miui.mediaeditor`（相册-编辑）、可选 `com.android.camera`（配 Magisk CameraOnly）、`com.miui.gallery`（占位）
 >
 > ✅ **本版本完全不伪装系统属性**：不做 `resetprop`、不 hook `android.os.SystemProperties`、不修改任何 `ro.*` 值。改为**直接 hook App 内部的门禁判定方法**返回 `true`（只影响被 hook 的两个进程）。仍为静态分析产物，**未真机运行验证**。
+
+> **v2.2.1 修复（网页打不开 / `net::ERR_HTTP_RESPONSE_CODE_FAILURE`）**：旧版「打开登录页」使用手工拼接的
+> passport URL，其中 `callback=...i.mi.com/sts?sign=x...` 的 `sign=x` 只是从 ROM 复制过来的占位符；passport 登录
+> 后会带无效 sign 跳回 `i.mi.com/sts`，服务端返回 HTTP 错误页。v2.2.1 改为**直接打开 `https://i.mi.com/`**
+> （由 i.mi.com 自己发起带有效 sign 的登录/STS 跳转链），并新增 WebView `onReceivedHttpError`/`onReceivedError`
+> 友好提示 + `i.mi.com/sts` 回调报错时的一次性自动恢复（自动回到 i.mi.com 重走登录）。
 
 ---
 
@@ -79,9 +85,10 @@
 
 ## 5. 验证状态（静态）
 
-- 可复现构建：两次构建 sha256 一致（`466ac663…716b`，37,476 B，vc=6/vn=2.2.0）。
+- 可复现构建：两次构建 sha256 一致（`197670bf…3f75`，41,572 B，vc=7/vn=2.2.1）。
 - 签名：apksigner `Verifies`，v1+v2+v3（`--min-sdk-version 21` 校验）。
-- APK：`classes.dex`（60,144 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=6/vn=2.2.0、minSdk 29/targetSdk 35、INTERNET、launchable Activity；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- APK：`classes.dex`（约 67 KB）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=7/vn=2.2.1、minSdk 29/targetSdk 35、INTERNET、launchable Activity；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- v2.2.1 新增：WebView 错误处理方法（`onReceivedHttpError`/`onReceivedError`）、`i.mi.com/sts` 一次性自动恢复逻辑、直接打开 `https://i.mi.com/` 的登录/STS 入口；dex 中**已无**旧的无效应答 URL（`pass/serviceLogin?sid=i.mi.com` 与 `sts%3Fsign%3Dx` 均为 0）。
 - 新增功能字符串已验证入 dex（检测 Cookie、serviceToken、3 个探测端点、Cookie 组成检查、2.2.0）；**未硬编码任何用户凭据**（源码与 dex 中均无粘贴过的 userId/cUserId/deviceId 字面量）；Cookie 值不写入日志/诊断文件。
 - dex 中**不存在**任何属性伪装字符串：`ro.theme_customize`、`ro.miui.build.region`、`ro.theme_leica`、`ro.special_edition`、`SPOOF_PROPS`、`hookSystemProperties`、`resetprop`。
 - Hook 目标均来自两国 smali 逐行证据：`docs/lsposed_hook_targets.md`（editor）、`docs/camera_hook_targets.md`（camera）。
@@ -92,7 +99,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.2.0.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（37,476 B，sha256 `466ac663…716b`） |
+| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.2.1.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（41,572 B，sha256 `197670bf…3f75`） |
 | `work/leica/lsposed/app/` | 模块源码（Java + manifest + xposed 元数据） |
 | `work/leica/lsposed/app/README_APP.md` | 用户指南（中文，含两条使用路径/排错） |
 | `work/leica/lsposed/build.sh` / `README_BUILD.md` | 无 Gradle 可复现构建 |
