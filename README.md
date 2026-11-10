@@ -1,12 +1,12 @@
 # nezha-leica-moment-lsposed
 
-**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.2.0 —— 零属性伪装**
+**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.2.1 —— 零属性伪装**
 
 > ✅ 不 resetprop、不 hook `SystemProperties`、不修改任何 `ro.*` 属性：改为**直接 hook App 内部判定方法**返回 true（仅影响被 hook 进程）。
-> 同时保留小米账号 Cookie 登录/注入、未登录兜底；v2.2.0 新增 **Cookie 体检（只读 GET 探测）**、**WebView STS 助手（补 serviceToken）** 与**卡片式新 UI**。CTA 不强制、不伪造硬件认证、不绕过服务端权益。
+> 同时保留小米账号 Cookie 登录/注入、未登录兜底；v2.2.1 修复 STS 网页错误（`net::ERR_HTTP_RESPONSE_CODE_FAILURE`，旧版 sign=x 占位符问题）；v2.2.0 新增 **Cookie 体检（只读 GET 探测）**、**WebView STS 助手（补 serviceToken）** 与**卡片式新 UI**。CTA 不强制、不伪造硬件认证、不绕过服务端权益。
 
 - 目标：`com.miui.mediaeditor`（相册-编辑，国际版 2.10.40.4.8-global / 国行 2.10.43.0.6）；可选 `com.android.camera`（配 Magisk CameraOnly 提供国行 MiuiCamera 6.7 APK）。
-- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.2.0.apk`（37,476 B，sha256 `466ac663…716b`，versionCode 6）。
+- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.2.1.apk`（41,572 B，sha256 `197670bf…3f75`，versionCode 7）。
 - 未真机验证；仅供个人设备本地研究与自用修改。
 
 ---
@@ -84,6 +84,15 @@ VERSION_CODE=5 VERSION_NAME=2.1.0 ./build.sh app dist/LeicaMoment_LSPosed_v2.1.0
 - apksigner `Verifies`（v1+v2+v3，`--min-sdk-version 21`）；`aapt2 dump badging` 正常；dex 内 0 个 `de.robv` 类定义。
 - dex 中**不存在** `ro.theme_customize`/`ro.miui.build.region`/`ro.theme_leica`/`ro.special_edition`/`SPOOF_PROPS`/`hookSystemProperties`/`resetprop`（零属性伪装证据）。
 - Hook 目标均有两版 smali 证据（`docs/`）。
+
+## 5.1 v2.2.1 修复：STS 网页打不开（`net::ERR_HTTP_RESPONSE_CODE_FAILURE`）
+
+旧版「打开登录页」使用手工拼接的 passport URL（`callback=...i.mi.com/sts?sign=x...`），`sign=x` 只是从 ROM 复制的占位符；登录后 passport 带**无效 sign** 跳回 `i.mi.com/sts`，服务端返回 HTTP 错误页，WebView 显示该错误。v2.2.1 起：
+
+- 「打开 i.mi.com（登录+STS）」直接加载 `https://i.mi.com/`，由小米站点发起带有效 sign 的登录/STS 跳转链；
+- 新增 WebView `onReceivedHttpError` / `onReceivedError` 友好提示；
+- 当 `i.mi.com/sts` 回调页报错时**一次性自动恢复**：自动回到 i.mi.com 重走登录流程；
+- 「打开小米账号页（备用）」打开 `account.xiaomi.com`。
 
 ## 6. 已知限制
 
