@@ -1,0 +1,5 @@
+# LSPosed module metadata (parsed only for modern libxposed-API modules; harmless for our
+# legacy IXposedHookLoadPackage module, kept so the file is correct if ever migrated).
+minApiVersion=100
+targetApiVersion=100
+staticScope=true
