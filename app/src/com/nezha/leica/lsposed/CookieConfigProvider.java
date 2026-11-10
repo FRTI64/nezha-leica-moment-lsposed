@@ -19,11 +19,13 @@ import android.util.Log;
  * private SharedPreferences. Callers are authenticated by uid and package
  * name; there is no android:permission because a normal 3rd-party app cannot
  * obtain a signature-level permission of ours anyway, so the check is done in
- * code.</p>
+ * code. Allowed: com.miui.mediaeditor, com.miui.gallery, com.android.camera
+ * (the camera process only receives the gate toggle; cookie fields are
+ * stripped for it) and the module app itself.</p>
  *
  * <p>Supported methods:</p>
  * <ul>
- *   <li>{@code get_config} -&gt; Bundle{cookie, captured_cookie, enable_props,
+ *   <li>{@code get_config} -&gt; Bundle{cookie, captured_cookie, enable_gate_bypass,
  *       enable_cookie, force_cta, module_version}</li>
  *   <li>{@code set_captured_cookie} extras{cookie} -&gt; Bundle{ok} (the hooked
  *       process reports the real Xiaomi STS cookie it just fetched)</li>
@@ -34,9 +36,13 @@ public class CookieConfigProvider extends ContentProvider {
 
     private static final String TAG = "LeicaMomentLSP";
 
+    /** Package of the CN MiuiCamera mounted by the Magisk CameraOnly variant. */
+    private static final String CAMERA_PACKAGE = "com.android.camera";
+
     private static final String[] ALLOWED_PACKAGES = new String[]{
             "com.miui.mediaeditor",
             "com.miui.gallery",
+            "com.android.camera",
             "com.nezha.leica.lsposed"
     };
 
@@ -78,7 +84,8 @@ public class CookieConfigProvider extends ContentProvider {
             return null;
         }
         int callingUid = Binder.getCallingUid();
-        if (!isAllowedCaller(ctx, callingUid)) {
+        String callerPackage = resolveCallerPackage(ctx, callingUid);
+        if (callerPackage == null) {
             Log.w(TAG, "CookieConfigProvider: rejected call method=" + method
                     + " from uid=" + callingUid);
             Bundle denied = new Bundle();
@@ -88,11 +95,23 @@ public class CookieConfigProvider extends ContentProvider {
         }
 
         if (ModuleConfig.METHOD_GET_CONFIG.equals(method)) {
-            return ModuleConfig.buildConfigBundle(ctx);
+            Bundle config = ModuleConfig.buildConfigBundle(ctx);
+            if (CAMERA_PACKAGE.equals(callerPackage)) {
+                // The camera process only needs the gate-bypass toggle; never expose
+                // the Xiaomi account cookie to it.
+                config.putString("cookie", "");
+                config.putString("captured_cookie", "");
+            }
+            return config;
         }
 
         if (ModuleConfig.METHOD_SET_CAPTURED_COOKIE.equals(method)) {
             Bundle out = new Bundle();
+            if (CAMERA_PACKAGE.equals(callerPackage)) {
+                out.putBoolean("ok", false);
+                out.putString("error", "camera package may not store cookies");
+                return out;
+            }
             String cookie = extras == null ? null : extras.getString("cookie");
             if (cookie != null) {
                 cookie = cookie.trim();
@@ -112,6 +131,10 @@ public class CookieConfigProvider extends ContentProvider {
 
         if (ModuleConfig.METHOD_GET_CAPTURED_COOKIE.equals(method)) {
             Bundle out = new Bundle();
+            if (CAMERA_PACKAGE.equals(callerPackage)) {
+                out.putString("cookie", "");
+                return out;
+            }
             out.putString("cookie", ModuleConfig.prefs(ctx)
                     .getString(ModuleConfig.KEY_CAPTURED_COOKIE, ""));
             return out;
@@ -121,28 +144,32 @@ public class CookieConfigProvider extends ContentProvider {
         return null;
     }
 
-    /** Verifies the caller is our own app, com.miui.mediaeditor or com.miui.gallery. */
-    private boolean isAllowedCaller(Context ctx, int uid) {
+    /**
+     * Resolves the calling package and verifies it is one of the allowed ones
+     * (our own app, com.miui.mediaeditor, com.miui.gallery, com.android.camera).
+     * Returns the matched package name, or null when the caller is not allowed.
+     */
+    private String resolveCallerPackage(Context ctx, int uid) {
         try {
             if (uid == Process.myUid()) {
-                return true;
+                return ctx.getPackageName();
             }
             PackageManager pm = ctx.getPackageManager();
             String[] packages = pm.getPackagesForUid(uid);
             if (packages == null) {
-                return false;
+                return null;
             }
             for (int i = 0; i < packages.length; i++) {
                 String pkg = packages[i];
                 for (int j = 0; j < ALLOWED_PACKAGES.length; j++) {
                     if (ALLOWED_PACKAGES[j].equals(pkg)) {
-                        return true;
+                        return pkg;
                     }
                 }
             }
         } catch (Throwable t) {
             Log.w(TAG, "CookieConfigProvider: caller check failed: " + t);
         }
-        return false;
+        return null;
     }
 }
