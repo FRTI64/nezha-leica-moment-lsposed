@@ -156,16 +156,16 @@ HyperOS 4 引入了大量 Rust 组件：
 使用旧 Cookie/旧开关状态（模块配置本身约 8 秒刷新，但进程缓存的 Cookie 无法原地失效）。
 一般无需重启手机；**首次安装模块后建议重启一次手机**。
 
-## 7. Cookie 体检 / STS 助手 / 界面说明（v2.2.0 新增）
+## 7. Cookie 体检 / STS 助手 / 界面说明（v2.2.0 新增 / v2.2.1 修复 STS 入口）
 
 模块首页为纯代码绘制的卡片式界面（深色/浅色自适应，无 XML 布局），分区：
 
 - **① 状态总览**：门禁解锁 Hook 是否启用、Cookie 是否已配置、是否含 serviceToken、上次体检结论。
   顶部状态胶囊实时显示「门禁 / Cookie / 体检」状态。
 - **② 账号与 Cookie**：
-  - 「打开登录页」→ 在可折叠 WebView 中登录小米账号（passport 登录 URL 与 CN ROM 一致）；
-  - 「去 i.mi.com 完成 STS」→ 在 WebView 中打开 `https://i.mi.com/`，登录状态下会触发
-    STS（`serviceToken`）签发；
+  - 「打开 i.mi.com（登录+STS）」→ 直接在可折叠 WebView 打开 `https://i.mi.com/`：未登录会自动跳转
+    小米账号登录（passport 使用**有效 sign**），登录后自动完成 STS 并回到 i.mi.com（下发 `serviceToken` 等 Cookie）；
+  - 「打开小米账号页（备用）」→ 打开 `https://account.xiaomi.com/`（异常时备用；登录后请回到 i.mi.com 完成 STS）；
   - 「读取登录 Cookie」→ 合并 `account.xiaomi.com` / `i.mi.com` / `gallery.i.mi.com` /
     `api.open.ai.xiaomi.com` / `xiaomi.com` 的 Cookie（按名字去重，先到先得）；
   - 编辑框为等宽字体、可长按选择；另有「复制 Cookie」「保存设置」「清空」；
@@ -187,6 +187,14 @@ HyperOS 4 引入了大量 Rust 组件：
 - **④ 功能开关**：门禁解锁（直接方法 Hook，不修改任何系统属性）、Cookie 注入；
   CTA 开关为不可用状态（本模块有意不强制 CTA）。
 - **⑤ 使用说明与限制**：可折叠，内容与第 2~9 节一致。
+
+**v2.2.1 修复说明（网页打不开问题）：** 旧版本（v2.2.0 及以前）的「打开登录页」使用手工拼接的
+passport URL，其中 `callback=...i.mi.com/sts?sign=x...` 的 `sign=x` 只是从 ROM 字符串复制的占位符。
+passport 登录成功后会带这个**无效 sign** 跳回 `i.mi.com/sts`，服务端返回 HTTP 错误页，WebView 显示
+`net::ERR_HTTP_RESPONSE_CODE_FAILURE`。v2.2.1 起改为**直接打开 `https://i.mi.com/`**，由 i.mi.com 自己
+发起带有效 sign 的登录/STS 跳转链；同时新增 WebView 的 HTTP 错误/加载失败提示与一次性自动恢复
+（在 `i.mi.com/sts` 回调报错时自动回到 i.mi.com 重走登录流程）。若仍失败，请改用「系统账号捕获」
+或手动粘贴 Cookie。
 
 **安全说明（重要）：**
 
