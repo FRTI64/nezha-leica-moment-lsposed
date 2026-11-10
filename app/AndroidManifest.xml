@@ -5,8 +5,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.nezha.leica.lsposed"
-    android:versionCode="12"
-    android:versionName="2.4.2">
+    android:versionCode="13"
+    android:versionName="2.4.3">
 
     <uses-permission android:name="android.permission.INTERNET" />
 
