@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "2.1.0";
+    public static final String MODULE_VERSION = "2.2.0";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
