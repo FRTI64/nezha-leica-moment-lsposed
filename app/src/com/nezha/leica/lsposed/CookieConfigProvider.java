@@ -23,10 +23,13 @@ import android.util.Log;
  * (the camera process only receives the gate toggle; cookie fields are
  * stripped for it) and the module app itself.</p>
  *
- * <p>v2.4.0: the system-account cookie path was removed entirely. The only
- * supported method is {@code get_config} -&gt; Bundle{cookie (user-supplied
- * only), enable_gate_bypass, enable_cookie, force_cta, module_version}. The
- * hooked process never reports any cookie back.</p>
+ * <p>v2.4.0: the system-account cookie path was removed entirely. Supported
+ * methods: {@code get_config} -&gt; Bundle{cookie (user-supplied only),
+ * enable_gate_bypass, enable_cookie, force_cta, cloud_trace, module_version};
+ * {@code set_cloud_trace} extras{trace} -&gt; Bundle{ok} (on-device request trace:
+ * URL path + HTTP code only, never tokens/query/body); {@code get_cloud_trace}
+ * -&gt; Bundle{trace} for the module UI/diagnostics. The hooked process never
+ * reports any cookie back.</p>
  */
 public class CookieConfigProvider extends ContentProvider {
 
@@ -94,10 +97,45 @@ public class CookieConfigProvider extends ContentProvider {
             Bundle config = ModuleConfig.buildConfigBundle(ctx);
             if (CAMERA_PACKAGE.equals(callerPackage)) {
                 // The camera process only needs the gate-bypass toggle; never expose
-                // the user cookie to it.
+                // the user cookie or diagnostics to it.
                 config.putString("cookie", "");
+                config.putString("cloud_trace", "");
             }
             return config;
+        }
+
+        if (ModuleConfig.METHOD_SET_CLOUD_TRACE.equals(method)) {
+            Bundle out = new Bundle();
+            if (CAMERA_PACKAGE.equals(callerPackage)) {
+                out.putBoolean("ok", false);
+                return out;
+            }
+            String trace = extras == null ? null : extras.getString("trace");
+            if (trace == null) {
+                trace = "";
+            }
+            if (trace.length() > 4096) {
+                trace = trace.substring(trace.length() - 4096);
+            }
+            try {
+                ModuleConfig.prefs(ctx).edit()
+                        .putString(ModuleConfig.KEY_CLOUD_TRACE, trace)
+                        .apply();
+                int lines = trace.isEmpty() ? 0 : trace.split("\n").length;
+                Log.i(TAG, "CookieConfigProvider: cloud trace stored (" + lines
+                        + " lines, no token values)");
+                out.putBoolean("ok", true);
+            } catch (Throwable t) {
+                out.putBoolean("ok", false);
+            }
+            return out;
+        }
+
+        if (ModuleConfig.METHOD_GET_CLOUD_TRACE.equals(method)) {
+            Bundle out = new Bundle();
+            out.putString("trace", ModuleConfig.prefs(ctx)
+                    .getString(ModuleConfig.KEY_CLOUD_TRACE, ""));
+            return out;
         }
 
         Log.w(TAG, "CookieConfigProvider: unknown method " + method);
