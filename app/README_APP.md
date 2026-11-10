@@ -10,12 +10,12 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.2.0.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 6 / versionName 2.2.0，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.0.0 / v2.1.0 已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.3.0.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 9 / versionName 2.3.0，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.2.2）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
-   v2.2.0 在 v2.1.0 全部 hook 基础上新增：**Cookie 体检（只读 GET）**、**WebView STS 助手**、
-   **Cookie 组成检查** 与 **卡片式深色模式 UI**（见第 7 节）。
+   v2.3.0 重点：**全屏登录页（替代不可用的内嵌小 WebView）**、**Cookie 来源模式（自动/手动/系统捕获）**、
+   **系统捕获的 STS Cookie 成为自动首选**、**Cookie 体检 UA 适配（web Cookie 常见 401 的排查）**（见第 5、7 节）。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -106,35 +106,44 @@ HyperOS 4 引入了大量 Rust 组件：
   注意：清除数据会同时清掉相册的本地设置/缓存，请谨慎，之后重新打开相册。
 - 相机/媒体编辑器的徕卡云端路径为 Java 实现，Cookie 注入与账号探针不受 Rust 影响。
 
-## 5. 登录小米账号 / 获取 Cookie
+## 5. 登录小米账号 / 获取 Cookie（v2.3.0 推荐流程）
 
-模块 App 首页（打开「徕卡一瞬 LSPosed」图标）提供三种 Cookie 来源：
+> 关键结论：**系统账号捕获的 STS Cookie 才是云 API 接受的可靠凭据**；WebView/网页登录得到的是
+> 网页 Cookie（常带 `pass_ua=web`），即使含 `serviceToken` 也可能被云 API 拒绝（常见 HTTP 401）。
+> 因此 v2.3.0 把「系统捕获」做成一等来源，并支持「自动」模式（手动为空时自动使用捕获的 Cookie）。
 
-1. **WebView 登录抓取（首选，简单）**
-   - 在首页网页中登录小米账号；
-   - 点「读取登录Cookie」→ 会把 `account.xiaomi.com` / `i.mi.com` /
-     `api.open.ai.xiaomi.com` / `xiaomi.com` 的 Cookie 合并（按名字去重）成
-     `name=value; name=value` 形式的 Cookie 头；
-   - 点「保存设置」。
-2. **手动粘贴**
-   - 从其它已登录设备/抓包结果复制 Cookie 头，粘贴到输入框 →「保存设置」。
-3. **系统账号捕获（最可靠）**
-   - 先在系统设置中登录小米账号；
-   - 打开相册 → 编辑 → 触发一次云端/徕卡功能，模块会 hook App 自己取 STS Cookie 的
-     方法 `b()`，把 App 实际取到的 Cookie **自动上报**并保存在本模块（第③节显示）；
-   - 回到模块 App 点「把捕获的 Cookie 填入上方输入框」→「保存设置」即可复用它。
+### 5.1 推荐流程（无需手动折腾 Cookie）
 
-4. **调起系统小米账号登录（不需要 WebView 登录）**
-   - 模块首页第③节点「登录系统小米账号」→ 调起系统小米账号认证界面
-     （`AccountManager.addAccount("com.xiaomi", "passportapi", …)`，与 App 自身登录流程相同）；
-   - 登录成功后打开相册 → 编辑一次并触发云端/徕卡功能，App 会自行获取 STS Cookie，
-     模块自动捕获（第③节显示）；
-   - 回到模块点「把捕获的 Cookie 填入上方输入框」→「保存设置」。
+1. 在**系统设置**里登录小米账号（或点模块内「登录系统小米账号」调起系统认证界面）。
+2. 打开**相册 → 编辑**一次并触发云端/徕卡功能；模块会 hook App 自己取 STS Cookie 的方法，
+   把 App 实际取到的 **STS Cookie 自动捕获**并保存（界面「系统账号捕获的 STS Cookie」区显示长度与键名）。
+3. 回到模块：把「Cookie 来源」保持为 **自动（推荐）**，或选择 **系统捕获**；点「保存设置」。
+   点「填入捕获的 Cookie」只是把捕获值填入手动输入框，便于查看/复制；一般不需要。
+4. 清除相册能力缓存（设置→应用→相册→存储→清除缓存/数据），强制停止「媒体编辑器 / 相册」后实测。
 
-> 说明：WebView 登录得到的 Cookie 可能与云 API 期望的 STS Cookie 不完全一致；
-> 第③节「系统账号捕获的 Cookie」来自 App 原生 AccountManager 链路，通常更可靠。
-> 若云端返回 401/任务失败，可「清空」手动 Cookie，让模块回退使用 App 原生 Cookie。
->
+「自动」模式下的注入优先级与界面一致：**手动 Cookie 优先，为空时使用系统捕获的 STS Cookie**。
+所以设备已登录系统小米账号时，**什么都不填也能自动注入可靠的 STS Cookie**。
+
+### 5.2 Cookie 来源模式
+
+| 来源 | 行为 |
+|---|---|
+| **自动（推荐）** | 手动/网页 Cookie 优先；为空时自动使用系统捕获的 STS Cookie。 |
+| **手动 / 网页 Cookie** | 只使用手动输入框中的 Cookie（可粘贴，或由全屏登录页返回）。 |
+| **系统捕获（STS Cookie）** | 只使用 App 自己通过系统小米账号获取的 STS Cookie（最可靠，含 `hyperos_sec_common_*` / `serviceToken`）。 |
+
+页面会显示「当前生效来源」，手动与捕获两份 Cookie 分别有组成检查（**只显示键名/长度，不显示令牌值**）。
+
+### 5.3 全屏登录页（备用方案）
+
+- 点「**全屏登录页（获取 Cookie）**」打开新 Activity：全屏 WebView + 顶部「返回 / 刷新 / 完成」、
+  进度条、错误浮层；默认打开 `https://i.mi.com/`（未登录会自动走 passport 登录 → STS 链）。
+- 顶部「完成」会把 `account.xiaomi.com` / `i.mi.com` / `gallery.i.mi.com` /
+  `api.open.ai.xiaomi.com` / `xiaomi.com` 的 Cookie 合并（按名字去重）并回填到模块的手动 Cookie 框。
+- `i.mi.com/sts` 回调页若报 HTTP 错误，会自动回到 `i.mi.com` 重走一次登录流程（一次性自动恢复）。
+- 网页 Cookie 可能仍被云 API 拒绝（401）：此时请把来源切到「系统捕获」或使用系统账号捕获。
+- 设备无系统小米账号、或想用另一个账号时，再使用此备用方案。
+
 > **设备未登录系统小米账号时**：上传步骤会调用 AccountUtil 登录探针（CN `ga0.e.a(Context)` /
 > GLOBAL `be0.e.a(Context)`），返回 null 时直接失败 `uploadFile: failed, not login`。
 > 本模块已 hook 该探针：当配置了 Cookie 时，用 Cookie 中的 `userId`/`cUserId`（URL 解码后）
@@ -156,23 +165,22 @@ HyperOS 4 引入了大量 Rust 组件：
 使用旧 Cookie/旧开关状态（模块配置本身约 8 秒刷新，但进程缓存的 Cookie 无法原地失效）。
 一般无需重启手机；**首次安装模块后建议重启一次手机**。
 
-## 7. Cookie 体检 / STS 助手 / 界面说明（v2.2.0 新增 / v2.2.1 修复 STS 入口）
+## 7. 全屏登录 / Cookie 来源 / 体检 / 界面说明（v2.3.0 更新）
 
 模块首页为纯代码绘制的卡片式界面（深色/浅色自适应，无 XML 布局），分区：
 
 - **① 状态总览**：门禁解锁 Hook 是否启用、Cookie 是否已配置、是否含 serviceToken、上次体检结论。
   顶部状态胶囊实时显示「门禁 / Cookie / 体检」状态。
 - **② 账号与 Cookie**：
-  - 「打开 i.mi.com（登录+STS）」→ 直接在可折叠 WebView 打开 `https://i.mi.com/`：未登录会自动跳转
-    小米账号登录（passport 使用**有效 sign**），登录后自动完成 STS 并回到 i.mi.com（下发 `serviceToken` 等 Cookie）；
-  - 「打开小米账号页（备用）」→ 打开 `https://account.xiaomi.com/`（异常时备用；登录后请回到 i.mi.com 完成 STS）；
-  - 「读取登录 Cookie」→ 合并 `account.xiaomi.com` / `i.mi.com` / `gallery.i.mi.com` /
-    `api.open.ai.xiaomi.com` / `xiaomi.com` 的 Cookie（按名字去重，先到先得）；
-  - 编辑框为等宽字体、可长按选择；另有「复制 Cookie」「保存设置」「清空」；
-  - **Cookie 组成检查**：以彩色标签显示 `passToken` / `serviceToken` / `cUserId` / `userId` /
-    `deviceId` / `passInfo` / `uLocale` / `pass_ua` 等键是否存在（**只显示键名与长度，不显示令牌值**）；
-    若缺少 `serviceToken` 会显示醒目警告并给出解决建议（完成 STS 或使用系统账号捕获的 Cookie）；
-  - 「登录系统小米账号」与「填入捕获的 Cookie」保留；捕获区只显示键名与长度，不直接显示令牌值。
+  - 「**全屏登录页（获取 Cookie）**」→ 打开独立的全屏 WebView 登录页（顶部 返回/刷新/完成、
+    进度条、错误提示、`i.mi.com/sts` 失败自动恢复），完成后 Cookie 自动回填到手动输入框；
+  - 「登录系统小米账号」→ 调起系统小米账号认证界面（与 App 自身登录流程相同），登录后到相册编辑
+    触发一次云端请求即可让模块自动捕获 STS Cookie；
+  - 「**Cookie 来源**」单选：自动（推荐）/ 手动 / 系统捕获；下方「当前生效来源」实时显示；
+  - 手动 Cookie 输入框（等宽字体、可长按选择）；「填入捕获的 Cookie」「复制 Cookie」「保存设置」「清空」；
+  - **Cookie 组成检查**：手动与系统捕获**分别**以彩色标签显示 `passToken` / `serviceToken` /
+    `cUserId` / `userId` / `deviceId` / `passInfo` / `uLocale` / `pass_ua` 等键是否存在
+    （**只显示键名与长度，不显示令牌值**）；缺少 `serviceToken` 时显示醒目警告。
 - **③ Cookie 体检（只读探测）**：点「检测 Cookie 有效性」后，后台线程对以下 **GET 只读端点**
   发起请求（8 秒超时、不跟随重定向，以便识别登录跳转）：
   1. `https://i.mi.com/status/lite/setting?type=1`（强鉴权信号：未登录/无效 Cookie 返回 HTTP 401 + `{"R":401,...serviceLogin...}`）
@@ -187,6 +195,11 @@ HyperOS 4 引入了大量 Rust 组件：
   聚合结论按红/绿/黄组合给出；**只有红色才算"可能无效"**，网络/参数问题不代表 Cookie 无效。
   体检只验证 Cookie 是否被接受，云端权益（点数/设备白名单/硬件认证 token）仍由小米服务端校验；
   探测端点可能随服务端调整。
+
+  **v2.3.0 UA 适配：** 手动/网页来源（或 Cookie 含 `pass_ua=web`）会先用 **Chrome-mobile UA** 探测
+  （passport/web token 通常绑定浏览器 UA）；若首次返回 HTTP 401，会自动用 **MiuiGallery UA**
+  对同一端点重试一次，并报告最佳结果（结论中标注使用的 UA）。若手动/网页 Cookie 体检 401 而系统
+  捕获的 Cookie 存在，页面会明确提示切换到「系统捕获」或「自动」来源。
 - **④ 功能开关**：门禁解锁（直接方法 Hook，不修改任何系统属性）、Cookie 注入；
   CTA 开关为不可用状态（本模块有意不强制 CTA）。
 - **⑤ 使用说明与限制**：可折叠，内容与第 2~9 节一致。
@@ -204,6 +217,11 @@ passport 登录成功后会带这个**无效 sign** 跳回 `i.mi.com/sts`，服�
 发起带有效 sign 的登录/STS 跳转链；同时新增 WebView 的 HTTP 错误/加载失败提示与一次性自动恢复
 （在 `i.mi.com/sts` 回调报错时自动回到 i.mi.com 重走登录流程）。若仍失败，请改用「系统账号捕获」
 或手动粘贴 Cookie。
+
+**v2.3.0 变更说明：** ① 删除原来的内嵌小 WebView（手机屏幕上基本不可用），改为独立全屏
+`LoginActivity`；② 新增 Cookie 来源模式（自动/手动/系统捕获），系统捕获的 STS Cookie 成为自动首选，
+并成为 Hook 注入的同优先级来源；③ 体检增加 UA 适配与 401 时切换来源的明确提示；
+④ 推荐流程改为「系统账号 → 相册编辑触发自动捕获 → 自动来源 → 保存」，网页登录仅作备用。
 
 **安全说明（重要）：**
 
@@ -244,7 +262,9 @@ passport 登录成功后会带这个**无效 sign** 跳回 `i.mi.com/sts`，服�
 - **未登录设备的账号探针**：本模块用 Cookie 中的 `userId`/`cUserId` 伪造 AccountUtil 返回值
   以通过上传登录检查；这是客户端绕过，真实身份仍由服务端校验 Cookie，服务端可能拒绝
   无 CN 权益/无硬件认证的账号。
-- **Cookie 来源差异**：WebView 登录 Cookie ≠ 原生 STS Cookie；优先用「系统账号捕获」。
+- **Cookie 来源差异（v2.3.0 重点）**：WebView/网页登录 Cookie ≠ App 原生 STS Cookie，网页 Cookie
+  即使含 `serviceToken` 也可能被云 API 拒绝（常见 HTTP 401，尤其绑定 `pass_ua=web`/浏览器 UA 时）。
+  请优先使用「系统账号捕获」，或把 Cookie 来源设为「自动 / 系统捕获」。
 - **进程内 Cookie 缓存**：App 的网络拦截器把 Cookie 缓存在静态字段里，模块已同步覆盖该字段；
   但更换 Cookie/关闭注入后，**必须强制停止 mediaeditor 进程**才会完全生效（见第 6 节）。
 - **相机部分限制**：见第 3 节 —— 厂商相机 HAL legendary 能力与运行时 `legend_mode` SDK 无法用 Java
@@ -268,6 +288,8 @@ passport 登录成功后会带这个**无效 sign** 跳回 `i.mi.com/sts`，服�
 |---|---|
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
+| 体检显示网页 Cookie 被拒绝（HTTP 401） | 网页/passport Cookie 可能不被云 API 接受。把「Cookie 来源」切换为「系统捕获」或「自动」；或登录系统小米账号后到相册编辑一次让模块自动捕获 STS Cookie。 |
 | 日志有 hook，但云端任务失败 | 多为服务端权益/设备白名单/CTA/硬件 token 问题，客户端无法解决；可先确认系统已登录小米账号并尝试系统账号捕获的 Cookie。 |
 | 相机模式栏没有「徕卡一瞬」 | 确认已刷 Magisk CameraOnly 变体（CN MiuiCamera 6.7.000280.0）；LSPosed 作用域勾选 `com.android.camera`；强制停止相机；日志查 `camera hook installed:`；若 HAL 无 legendary 能力则仅 UI 出现、实际效果可能仍缺失（见第 3 节）。 |
 | 模块 App 打不开/白屏 | 确认系统 Android System WebView 已启用；不登录网页也可直接粘贴 Cookie。 |
+| 全屏登录页打不开/白屏 | 确认系统 Android System WebView 已启用；也可改用「登录系统小米账号」捕获或手动粘贴 Cookie。 |
