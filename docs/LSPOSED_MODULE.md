@@ -1,7 +1,7 @@
-# LSPosed 模块 v2.1.0：**不伪装任何系统属性**的小米账号 Cookie + 徕卡一瞬/二次增强解锁
+# LSPosed 模块 v2.2.0：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
 
 > 交付物：`out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.1.0.apk`（源：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.1.0.apk`；legacy Xposed 模块，LSPosed 可用）
-> 版本：`versionCode 5 / versionName 2.1.0`，29,284 B，sha256 `000021d9517678e9b787df9c0c8e849a983f526156a55cb6ba487d84a32b3a25`（两次构建字节一致）
+> 版本：`versionCode 6 / versionName 2.2.0`，37,476 B，sha256 `466ac66393a097d34272f322d2b47aef09aeebcf05ee7287a2a6a4c62669716b`（两次构建字节一致）
 > 目标：小米 17 Ultra（`nezha` / `nezha_global`），HyperOS 4 / Android 17；`com.miui.mediaeditor`（相册-编辑）、可选 `com.android.camera`（配 Magisk CameraOnly）、`com.miui.gallery`（占位）
 >
 > ✅ **本版本完全不伪装系统属性**：不做 `resetprop`、不 hook `android.os.SystemProperties`、不修改任何 `ro.*` 值。改为**直接 hook App 内部的门禁判定方法**返回 `true`（只影响被 hook 的两个进程）。仍为静态分析产物，**未真机运行验证**。
@@ -79,9 +79,10 @@
 
 ## 5. 验证状态（静态）
 
-- 可复现构建：两次构建 sha256 一致（`000021d9…3a25`，29,284 B）。
+- 可复现构建：两次构建 sha256 一致（`466ac663…716b`，37,476 B，vc=6/vn=2.2.0）。
 - 签名：apksigner `Verifies`，v1+v2+v3（`--min-sdk-version 21` 校验）。
-- APK：`classes.dex`（38,420 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=5/vn=2.1.0、minSdk 29/targetSdk 35、INTERNET、launchable Activity；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- APK：`classes.dex`（60,144 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=6/vn=2.2.0、minSdk 29/targetSdk 35、INTERNET、launchable Activity；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- 新增功能字符串已验证入 dex（检测 Cookie、serviceToken、3 个探测端点、Cookie 组成检查、2.2.0）；**未硬编码任何用户凭据**（源码与 dex 中均无粘贴过的 userId/cUserId/deviceId 字面量）；Cookie 值不写入日志/诊断文件。
 - dex 中**不存在**任何属性伪装字符串：`ro.theme_customize`、`ro.miui.build.region`、`ro.theme_leica`、`ro.special_edition`、`SPOOF_PROPS`、`hookSystemProperties`、`resetprop`。
 - Hook 目标均来自两国 smali 逐行证据：`docs/lsposed_hook_targets.md`（editor）、`docs/camera_hook_targets.md`（camera）。
 
@@ -91,7 +92,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.1.0.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK |
+| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.2.0.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（37,476 B，sha256 `466ac663…716b`） |
 | `work/leica/lsposed/app/` | 模块源码（Java + manifest + xposed 元数据） |
 | `work/leica/lsposed/app/README_APP.md` | 用户指南（中文，含两条使用路径/排错） |
 | `work/leica/lsposed/build.sh` / `README_BUILD.md` | 无 Gradle 可复现构建 |
