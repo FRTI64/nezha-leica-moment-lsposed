@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "2.4.0";
+    public static final String MODULE_VERSION = "2.4.1";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
@@ -28,6 +28,9 @@ public final class ModuleConfig {
     public static final String KEY_COOKIE = "cookie";
     public static final String KEY_ENABLE_GATE_BYPASS = "enable_gate_bypass";
     public static final String KEY_ENABLE_COOKIE = "enable_cookie";
+    /** Diagnostics only (key names / source domains; never token values). */
+    public static final String KEY_COOKIE_SOURCES = "cookie_sources";
+    public static final String KEY_COOKIE_DUP_KEYS = "cookie_dup_keys";
     public static final String KEY_FORCE_CTA = "force_cta";
 
     /** Defaults (also used when the provider is unreachable). */
