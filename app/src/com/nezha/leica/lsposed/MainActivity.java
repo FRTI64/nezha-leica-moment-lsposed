@@ -75,7 +75,7 @@ public class MainActivity extends Activity {
     private static final String AI_PROBE_URL =
             "https://api.open.ai.xiaomi.com/aiPhotoCloud/api/legendV2/list";
     private static final String AI_PROBE_LABEL =
-            "AI \u4e91\u5e73\u53f0\uff08\u771f\u5b9e\u76ee\u6807 API\uff0c\u53ea\u8bfb list\uff09";
+            "\u53c2\u8003\uff1aAI \u4e91\u5e73\u53f0\uff08\u57fa\u5740\u7531\u4e91\u7aef\u914d\u7f6e\u52a8\u6001\u4e0b\u53d1\uff0c\u53ef\u80fd 404\uff09";
     /** Desktop Chrome UA fallback for web-bound cookies on the AI-platform POST probe. */
     private static final String DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -926,13 +926,13 @@ public class MainActivity extends Activity {
                         "\u670d\u52a1\u7aef\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08\u54cd\u5e94\u542b 401/\u767b\u5f55\u6807\u8bc6\uff1bUA\uff1a"
                                 + ua + "\uff09" + suffix, snippet, KIND_MICLOUD, ua);
             }
-            if (looksLikeParamError(f.body)) {
-                return new ProbeResult(endpoint, VERDICT_WARN, f.code,
-                        "\u672a\u88ab\u8981\u6c42\u767b\u5f55\uff0c\u4f46\u7aef\u70b9\u53c2\u6570\u4e0d\u8db3\uff08\u65e0 auth \u4fe1\u53f7\uff1bUA\uff1a"
-                                + ua + "\uff09" + suffix, snippet, KIND_MICLOUD, ua);
-            }
+            // HTTP 2xx without login markers/401 identifiers == AUTH PASS for micloud.
+            // A business/param-error JSON body does not change the auth verdict.
+            boolean paramError = looksLikeParamError(f.body);
             return new ProbeResult(endpoint, VERDICT_OK, f.code,
-                    "\u672a\u88ab\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08Cookie \u53ef\u80fd\u6709\u6548\uff1bUA\uff1a" + ua + "\uff09" + suffix,
+                    "\u672a\u88ab\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08\u9274\u6743\u901a\u8fc7\uff0cHTTP 200\uff09"
+                            + (paramError ? "\uff08\u4e1a\u52a1\u53c2\u6570\u4e0d\u8db3\uff0c\u4e0d\u5f71\u54cd\u9274\u6743\u7ed3\u8bba\uff09" : "")
+                            + "\uff1bUA\uff1a" + ua + suffix,
                     snippet, KIND_MICLOUD, ua);
         }
         if (f.code == 301 || f.code == 302 || f.code == 303 || f.code == 307 || f.code == 308) {
@@ -995,30 +995,30 @@ public class MainActivity extends Activity {
         if (f.code >= 200 && f.code < 300) {
             if (looksLikeLoginRequired(f.body)) {
                 return new ProbeResult(AI_PROBE_URL, VERDICT_BAD, f.code,
-                        AI_PROBE_LABEL + "\u62d2\u7edd\uff1a\u54cd\u5e94\u542b\u767b\u5f55/401 \u6807\u8bc6\uff08UA\uff1a" + ua + "\uff09" + suffix,
+                        AI_PROBE_LABEL + "\u54cd\u5e94\u542b\u767b\u5f55/401 \u6807\u8bc6\uff08\u4ec5\u53c2\u8003\uff1bUA\uff1a" + ua + "\uff09" + suffix,
                         snippet, KIND_AI, ua);
             }
-            if (looksLikeParamError(f.body)) {
-                return new ProbeResult(AI_PROBE_URL, VERDICT_WARN, f.code,
-                        AI_PROBE_LABEL + "\u672a\u62d2\u7edd\uff0c\u4f46\u54cd\u5e94\u4e3a\u53c2\u6570/\u4e1a\u52a1\u9519\u8bef\uff08\u4ec5\u9274\u6743\u4fe1\u53f7\uff1bUA\uff1a"
-                                + ua + "\uff09" + suffix, snippet, KIND_AI, ua);
-            }
             return new ProbeResult(AI_PROBE_URL, VERDICT_OK, f.code,
-                    AI_PROBE_LABEL + "\u672a\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff08Cookie \u53ef\u80fd\u53ef\u7528\uff1bUA\uff1a" + ua + "\uff09" + suffix,
+                    AI_PROBE_LABEL + "\u8fd4\u56de HTTP 200\uff08\u4ec5\u53c2\u8003\uff0c\u4e0d\u53c2\u4e0e\u9274\u6743\u7ed3\u8bba\uff1bUA\uff1a"
+                            + ua + "\uff09" + suffix, snippet, KIND_AI, ua);
+        }
+        if (f.code == 404 || f.code == 405) {
+            return new ProbeResult(AI_PROBE_URL, VERDICT_WARN, f.code,
+                    AI_PROBE_LABEL + "\u8def\u5f84/\u57fa\u5740\u4e0d\u5339\u914d\uff08\u4e0d\u4ee3\u8868 Cookie \u65e0\u6548\uff1bUA\uff1a" + ua + "\uff09" + suffix,
                     snippet, KIND_AI, ua);
         }
         if (f.code == 401 || f.code == 403) {
             return new ProbeResult(AI_PROBE_URL, VERDICT_BAD, f.code,
-                    AI_PROBE_LABEL + "\u62d2\u7edd\uff08HTTP " + f.code + "\uff1bUA\uff1a" + ua + "\uff09" + suffix,
+                    AI_PROBE_LABEL + "\u62d2\u7edd\uff08HTTP " + f.code + "\uff1b\u53c2\u8003\u4fe1\u53f7\uff0cUA\uff1a" + ua + "\uff09" + suffix,
                     snippet, KIND_AI, ua);
         }
         if (f.code == 301 || f.code == 302 || f.code == 303 || f.code == 307 || f.code == 308) {
-            return new ProbeResult(AI_PROBE_URL, VERDICT_BAD, f.code,
-                    AI_PROBE_LABEL + "\u8df3\u8f6c\u5230\u767b\u5f55/\u5176\u5b83\u9875\u9762\uff08HTTP " + f.code + "\uff1bUA\uff1a" + ua + "\uff09" + suffix,
+            return new ProbeResult(AI_PROBE_URL, VERDICT_WARN, f.code,
+                    AI_PROBE_LABEL + "\u8df3\u8f6c\uff08HTTP " + f.code + "\uff0c\u4ec5\u53c2\u8003\uff1bUA\uff1a" + ua + "\uff09" + suffix,
                     sanitizeSnippet(f.location), KIND_AI, ua);
         }
         return new ProbeResult(AI_PROBE_URL, VERDICT_WARN, f.code,
-                AI_PROBE_LABEL + "\u8fd4\u56de HTTP " + f.code + "\uff08\u975e\u9274\u6743\u62d2\u7edd\uff0c\u53ef\u80fd\u7f3a\u53c2\uff1bUA\uff1a" + ua + "\uff09" + suffix,
+                AI_PROBE_LABEL + "\u8fd4\u56de HTTP " + f.code + "\uff08\u4ec5\u53c2\u8003\uff1bUA\uff1a" + ua + "\uff09" + suffix,
                 snippet, KIND_AI, ua);
     }
 
@@ -1114,66 +1114,59 @@ public class MainActivity extends Activity {
         if (probeAggregate == null) {
             return;
         }
-        int ok = 0;
-        int warn = 0;
-        int bad = 0;
+        int mlOk = 0;
+        int mlWarn = 0;
+        int mlBad = 0;
         int aiLevel = -1;
         for (int i = 0; i < results.size(); i++) {
             ProbeResult r = results.get(i);
             if (r.kind == KIND_AI) {
                 aiLevel = r.level;
             } else if (r.level == VERDICT_OK) {
-                ok++;
+                mlOk++;
             } else if (r.level == VERDICT_WARN) {
-                warn++;
+                mlWarn++;
             } else {
-                bad++;
+                mlBad++;
             }
         }
         StringBuilder agg = new StringBuilder();
-        if (bad > 0) {
-            agg.append("\u7ed3\u8bba\uff1ai.mi.com micloud \u63a2\u6d4b\u88ab\u62d2\u7edd\uff08\u89c1\u4e0a\u65b9\u7ea2\u8272\u9879\uff09\u3002"
-                    + "\u5f53\u524d\u7528\u6237 Cookie \u53ef\u80fd\u672a\u767b\u5f55/\u5df2\u8fc7\u671f\uff0c\u6216\u4e0d\u88ab micloud \u9274\u6743\u63a5\u53d7\u3002");
-            if (aiLevel == VERDICT_OK) {
-                agg.append("\n\u4f46 AI \u4e91\u5e73\u53f0\uff08\u771f\u5b9e\u76ee\u6807 API\uff09\u672a\u88ab\u62d2\u7edd\uff08\u7eff\u8272\uff09"
-                        + " \u2192 \u5b9e\u9645\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\u53ef\u80fd\u4ecd\u53ef\u7528\uff08\u4ee5\u5b9e\u6d4b\u4e3a\u51c6\uff09\u3002");
-            } else if (aiLevel == VERDICT_WARN) {
-                agg.append("\nAI \u4e91\u5e73\u53f0\uff08\u771f\u5b9e\u76ee\u6807 API\uff09\u7ed3\u679c\u4e3a\u9ec4\u8272\uff08\u672a\u660e\u786e\u62d2\u7edd/\u975e\u9274\u6743\u9519\u8bef\uff09"
-                        + " \u2192 \u5b9e\u9645\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\u53ef\u80fd\u4ecd\u53ef\u7528\uff08\u4ee5\u5b9e\u6d4b\u4e3a\u51c6\uff09\u3002");
-            } else if (aiLevel == VERDICT_BAD) {
-                agg.append("\n\u4e14 AI \u4e91\u5e73\u53f0\uff08\u771f\u5b9e\u76ee\u6807 API\uff09\u4e5f\u62d2\u7edd\u8be5 Cookie\uff08HTTP 401/403\uff09"
-                        + " \u2192 \u7f51\u9875 Cookie \u4e0d\u88ab\u5c0f\u7c73\u4e91\u9274\u6743\u63a5\u53d7\uff08\u670d\u52a1\u7aef\u884c\u4e3a\uff09\uff1b"
-                        + "\u5728\u4e0d\u4f7f\u7528\u7cfb\u7edf\u8d26\u53f7 Cookie \u7684\u524d\u63d0\u4e0b\u5ba2\u6237\u7aef\u65e0\u6cd5\u4fee\u590d\u3002");
+        if (mlBad > 0) {
+            agg.append("\u7ed3\u8bba\uff1amicloud \u8fd4\u56de 401/403\uff08\u6216\u91cd\u5b9a\u5411\u5230\u767b\u5f55\u9875\uff09"
+                    + " \u2192 \u7f51\u9875 Cookie \u672a\u88ab\u5c0f\u7c73\u4e91\u9274\u6743\u63a5\u53d7\uff08\u89c1\u7ea2\u8272\u9879\uff09\u3002"
+                    + "\u8bf7\u91cd\u65b0\u767b\u5f55/\u5b8c\u6210 STS \u540e\u91cd\u8bd5\uff1b\u5728\u4e0d\u4f7f\u7528\u7cfb\u7edf\u8d26\u53f7 Cookie \u7684\u524d\u63d0\u4e0b\uff0c"
+                    + "\u670d\u52a1\u7aef\u9274\u6743\u95ee\u9898\u5ba2\u6237\u7aef\u65e0\u6cd5\u4fee\u590d\u3002");
+        } else if (mlOk > 0) {
+            agg.append("\u7ed3\u8bba\uff1aCookie \u5df2\u88ab\u5c0f\u7c73\u4e91\u9274\u6743\u63a5\u53d7\uff08micloud HTTP 200\uff09\u2192 \u9274\u6743\u901a\u8fc7\uff1b"
+                    + "\u8bf7\u76f4\u63a5\u5b9e\u6d4b\u76f8\u518c\u7f16\u8f91\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\uff0c\u80fd\u5426\u51fa\u56fe\u53d6\u51b3\u4e8e"
+                    + "\u670d\u52a1\u7aef\u6743\u76ca/\u8bbe\u5907\u767d\u540d\u5355/\u786c\u4ef6\u8ba4\u8bc1 token\u3002");
+            if (mlWarn > 0) {
+                agg.append("\n\uff08\u53e6\u6709 ").append(mlWarn)
+                        .append(" \u4e2a\u7aef\u70b9\u7f51\u7edc/\u975e\u9274\u6743\u95ee\u9898\uff0c\u4e0d\u5f71\u54cd\u9274\u6743\u7ed3\u8bba\u3002\uff09");
             }
             if (lastSelfTestStatus >= 200 && lastSelfTestStatus < 300) {
-                agg.append("\n\u6ce8\u610f\uff1a\u7f51\u9875\u4f1a\u8bdd\u81ea\u68c0\u4e3a HTTP ").append(lastSelfTestStatus)
-                        .append("\uff08\u7f51\u9875\u4f1a\u8bdd\u6709\u6548\uff09\uff0c\u4f46\u6a21\u5757\u4f53\u68c0\u4ecd\u62d2\u7edd \u2192 "
-                                + "\u7f51\u9875 Cookie \u4e0e App \u4e91 API \u9274\u6743\u94fe\u8def\u5dee\u5f02\u3002");
-            } else if (lastSelfTestStatus == 401 || lastSelfTestStatus == 403) {
-                agg.append("\n\u6ce8\u610f\uff1a\u7f51\u9875\u4f1a\u8bdd\u81ea\u68c0\u4e5f\u4e3a HTTP ").append(lastSelfTestStatus)
-                        .append("\uff1a\u8bf7\u5148\u5728\u5168\u5c4f\u767b\u5f55\u9875\u5b8c\u6210\u767b\u5f55/STS \u540e\u91cd\u8bd5\u3002");
+                agg.append("\n\u7f51\u9875\u4f1a\u8bdd\u81ea\u68c0 HTTP ").append(lastSelfTestStatus)
+                        .append("\uff08\u7f51\u9875\u4f1a\u8bdd\u6709\u6548\uff09\uff0c\u4e0e\u9274\u6743\u901a\u8fc7\u7ed3\u8bba\u4e00\u81f4\u3002");
             }
-            if (warn > 0) {
-                agg.append("\n\u53e6\u6709 ").append(warn).append(" \u4e2a\u7aef\u70b9\u4e0d\u786e\u5b9a\uff08\u7f51\u7edc/\u53c2\u6570\u95ee\u9898\uff09\uff0c\u4e0d\u5f71\u54cd\u5224\u65ad\u3002");
-            }
-        } else if (aiLevel == VERDICT_BAD) {
-            agg.append("\u7ed3\u8bba\uff1ai.mi.com micloud \u672a\u88ab\u62d2\u7edd\uff0c\u4f46 AI \u4e91\u5e73\u53f0\uff08\u771f\u5b9e\u76ee\u6807 API\uff09"
-                    + "\u62d2\u7edd\u8be5 Cookie\uff08HTTP 401/403\uff09 \u2192 \u5b9e\u9645\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\u53ef\u80fd\u4e0d\u53ef\u7528"
-                    + "\uff08\u670d\u52a1\u7aef\u9274\u6743\u5dee\u5f02\uff0c\u5ba2\u6237\u7aef\u65e0\u6cd5\u7ed5\u8fc7\uff09\u3002");
-        } else if (ok > 0 && warn == 0) {
-            agg.append("\u7ed3\u8bba\uff1a\u672a\u51fa\u73b0\u8981\u6c42\u91cd\u65b0\u767b\u5f55\u7684\u8ff9\u8c61 \u2192 \u5f53\u524d\u7528\u6237 Cookie \u53ef\u80fd\u6709\u6548"
-                    + "\uff08\u4ecd\u4ee5\u5b9e\u9645\u4e91\u7aef\u4efb\u52a1\u662f\u5426\u6210\u529f\u4e3a\u51c6\uff09\u3002");
-        } else if (ok > 0) {
-            agg.append("\u7ed3\u8bba\uff1a\u6709\u7aef\u70b9\u672a\u88ab\u8981\u6c42\u91cd\u65b0\u767b\u5f55\uff0c\u53e6\u6709 ").append(warn)
-                    .append(" \u4e2a\u7aef\u70b9\u4e0d\u786e\u5b9a\uff08\u7f51\u7edc/\u53c2\u6570\u95ee\u9898\uff09\u3002");
+        } else if (mlWarn > 0) {
+            agg.append("\u7ed3\u8bba\uff1a\u65e0\u6cd5\u5224\u5b9a\uff08\u7f51\u7edc\u4e0d\u53ef\u8fbe/\u8d85\u65f6/\u7aef\u70b9\u53c2\u6570\u95ee\u9898\uff09"
+                    + " \u2014\u2014 \u8fd9\u4e0d\u4ee3\u8868 Cookie \u65e0\u6548\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5\u3002");
         } else {
-            agg.append("\u7ed3\u8bba\uff1a\u65e0\u6cd5\u5224\u5b9a\uff08\u7f51\u7edc\u4e0d\u53ef\u8fbe\u6216\u7aef\u70b9\u53c2\u6570\u4e0d\u8db3\uff09\u3002\u8fd9\u4e0d\u4ee3\u8868 Cookie \u65e0\u6548\u3002");
+            agg.append("\u7ed3\u8bba\uff1a\u672a\u6267\u884c\u6216\u65e0\u6cd5\u5224\u5b9a\u3002");
+        }
+        if (aiLevel >= 0) {
+            agg.append("\n\u53c2\u8003\uff1aAI \u4e91\u5e73\u53f0\u884c\u4e0d\u53c2\u4e0e\u9274\u6743\u7ed3\u8bba\u2014\u2014\u5176\u57fa\u5740\u7531\u4e91\u7aef\u914d\u7f6e\u52a8\u6001\u4e0b\u53d1"
+                    + "\uff08AIConfig.url_config\uff09\uff0c404/405 \u53ea\u8868\u793a\u8def\u5f84/\u57fa\u5740\u4e0d\u5339\u914d\uff0c\u4e0d\u4ee3\u8868 Cookie \u65e0\u6548\uff1b"
+                    + "401/403 \u624d\u6709\u9274\u6743\u610f\u4e49\u3002");
+            if (aiLevel == VERDICT_BAD) {
+                agg.append("\n\u53c2\u8003\uff1a\u672c\u6b21 AI \u4e91\u5e73\u53f0\u884c\u8fd4\u56de 401/403\uff08\u4ec5\u4f9b\u53c2\u8003\uff0c\u4e0d\u6539\u53d8\u4e0a\u65b9 micloud \u9274\u6743\u7ed3\u8bba\uff09\u3002");
+            }
         }
         if (cookieDupKeys != null && !cookieDupKeys.isEmpty()) {
             agg.append("\n\u6ce8\u610f\uff1a\u5408\u5e76 Cookie \u65f6\u53d1\u73b0\u8de8\u57df\u91cd\u590d\u952e\uff08")
                     .append(cookieDupKeys)
                     .append("\uff09\uff0c\u5df2\u6309 i.mi.com > api.open.ai.xiaomi.com > gallery.i.mi.com > account.xiaomi.com "
-                            + "\u4f18\u5148\u7ea7\u53d6\u503c\uff1b\u82e5 401 \u53ef\u80fd\u4e0e\u6b64\u6709\u5173\uff08\u4ec5\u663e\u793a\u952e\u540d\uff0c\u4e0d\u663e\u793a\u503c\uff09\u3002");
+                            + "\u4f18\u5148\u7ea7\u53d6\u503c\uff1b\u82e5\u5f02\u5e38\u53ef\u80fd\u4e0e\u6b64\u6709\u5173\uff08\u4ec5\u663e\u793a\u952e\u540d\uff0c\u4e0d\u663e\u793a\u503c\uff09\u3002");
         }
         agg.append("\n\u6ce8\u610f\uff1a\u672c\u68c0\u6d4b\u4ec5\u9a8c\u8bc1 Cookie \u662f\u5426\u88ab\u63a5\u53d7\uff1b\u4e91\u7aef\u6743\u76ca\uff08\u70b9\u6570/\u8bbe\u5907\u767d\u540d\u5355/"
                 + "\u786c\u4ef6\u8ba4\u8bc1 token\uff09\u7531\u5c0f\u7c73\u670d\u52a1\u7aef\u6821\u9a8c\uff0c\u65e0\u6cd5\u901a\u8fc7\u672c\u68c0\u6d4b\u9a8c\u8bc1\u3002"
@@ -1588,6 +1581,10 @@ public class MainActivity extends Activity {
         sb.append("Cookie: length=").append(cookie.length())
                 .append(", keys=").append(keysOf(pairs)).append('\n');
         sb.append("Web self-test: ").append(selfTestLabel()).append('\n');
+        sb.append("Interpretation: micloud HTTP 200 => auth pass (Cookie accepted by Xiaomi cloud); "
+                + "business/param-error body does NOT change the auth verdict.\n");
+        sb.append("AI platform row is reference only: its base URL is remote-config driven (AIConfig.url_config), "
+                + "so 404/405 is a path/base mismatch, not an auth signal.\n");
         if (!cookieSources.isEmpty()) {
             sb.append("Cookie sources: ").append(describeSources()).append('\n');
         }
@@ -1601,7 +1598,7 @@ public class MainActivity extends Activity {
             for (int i = 0; i < lastProbe.size(); i++) {
                 ProbeResult r = lastProbe.get(i);
                 sb.append(" - ").append(r.kind == KIND_AI
-                        ? "AI platform POST list" : "micloud GET").append(' ');
+                        ? "AI platform POST list (reference)" : "micloud GET").append(' ');
                 sb.append(r.url).append(" -> ");
                 if (r.code > 0) {
                     sb.append("HTTP ").append(r.code);
@@ -1726,21 +1723,21 @@ public class MainActivity extends Activity {
         sb.append("3. \u56de\u6a21\u5757\u540e\u70b9\u300c\u4f53\u68c0\u300d\uff08\u53ea\u8bfb GET\uff09\uff1b\u82e5 401\uff0c\u5148\u56de\u5168\u5c4f\u9875\u5b8c\u6210\u767b\u5f55/STS\u3002\n");
         sb.append("4. \u6e05\u9664\u76f8\u518c\u80fd\u529b\u7f13\u5b58\uff08\u8bbe\u7f6e\u2192\u5e94\u7528\u2192\u76f8\u518c\u2192\u5b58\u50a8\u2192\u6e05\u9664\u7f13\u5b58/\u6570\u636e\uff09\uff0c"
                 + "\u5f3a\u5236\u505c\u6b62\u5a92\u4f53\u7f16\u8f91\u5668/\u76f8\u518c\u540e\u5b9e\u6d4b\u3002\n\n");
-        sb.append("\u3010\u81ea\u68c0\u3001\u4f53\u68c0\u4e0e\u771f\u5b9e\u76ee\u6807 API\u3011\n");
+        sb.append("\u3010\u81ea\u68c0\u3001\u4f53\u68c0\u4e0e AI \u53c2\u8003\u884c\u3011\n");
         sb.append("\u00b7 \u7f51\u9875\u4f1a\u8bdd\u81ea\u68c0\uff08LoginActivity \u5185\uff0cevaluateJavascript + JS bridge\uff09\u7528\u7f51\u9875\u4f1a\u8bdd\u8bbf\u95ee"
                 + " i.mi.com/status/lite/setting\uff1a401 = \u7f51\u9875\u672a\u767b\u5f55/\u9700 STS\uff1b200 = \u7f51\u9875\u4f1a\u8bdd\u6709\u6548\u3002\n");
-        sb.append("\u00b7 \u6a21\u5757\u4f53\u68c0\uff08Java\uff09\u5305\u542b\uff1a\u4e24\u4e2a i.mi.com micloud GET \u7aef\u70b9 + \u4e00\u4e2a "
-                + "AI \u4e91\u5e73\u53f0\uff08\u771f\u5b9e\u76ee\u6807 API\uff09POST `aiPhotoCloud/api/legendV2/list`\uff08body {} \u53ea\u8bfb list\uff0c"
-                + "\u4e0d\u53d1 create/\u6536\u8d39\u8bf7\u6c42\uff09\u3002\u5747\u5e26 Referer \u4e0e Accept-Language\uff1b\u7f51\u9875 Cookie "
-                + "\u4f7f\u7528 Web UA\uff0c401 \u65f6\u6362 UA \u91cd\u8bd5\uff08AI \u5e73\u53f0\u53e6\u8bd5\u684c\u9762 Chrome UA\uff09\u3002\n");
-        sb.append("\u00b7 i.mi.com micloud 401 \u4f46 AI \u5e73\u53f0\u7eff/\u9ec4 \u2192 \u5b9e\u9645\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\u53ef\u80fd\u4ecd\u53ef\u7528"
-                + "\uff08\u4ee5\u5b9e\u6d4b\u4e3a\u51c6\uff09\uff1b\u4e24\u8005\u90fd 401 \u2192 \u7f51\u9875 Cookie \u4e0d\u88ab\u5c0f\u7c73\u4e91\u9274\u6743\u63a5\u53d7"
-                + "\uff08\u670d\u52a1\u7aef\u884c\u4e3a\uff1b\u5728\u4e0d\u4f7f\u7528\u7cfb\u7edf\u8d26\u53f7 Cookie \u7684\u524d\u63d0\u4e0b\u5ba2\u6237\u7aef\u65e0\u6cd5\u4fee\u590d\uff09\u3002\n");
+        sb.append("\u00b7 micloud \u4f53\u68c0\uff08i.mi.com/status/lite/setting?type=1|2\uff09\uff1a**HTTP 2xx \u4e14\u65e0\u767b\u5f55/401 \u6807\u8bc6 = \u9274\u6743\u901a\u8fc7\uff08\u7eff\u8272\uff09**\uff1b"
+                + "\u82e5\u54cd\u5e94\u662f\u4e1a\u52a1\u53c2\u6570\u4e0d\u8db3\uff0c\u4ec5\u6dfb\u52a0\u300c\u4e1a\u52a1\u53c2\u6570\u4e0d\u8db3\uff0c\u4e0d\u5f71\u54cd\u9274\u6743\u7ed3\u8bba\u300d\u6ce8\u91ca\uff0c\u4e0d\u964d\u7ea7\u4e3a\u9ec4\u8272\u3002\n");
+        sb.append("\u00b7 \u300c\u53c2\u8003\uff1aAI \u4e91\u5e73\u53f0\u300dPOST \u884c\uff1a\u5b83\u7684\u57fa\u5740\u7531\u4e91\u7aef\u914d\u7f6e\u52a8\u6001\u4e0b\u53d1\uff08AIConfig.url_config\uff09\uff0c"
+                + "\u6240\u4ee5 404/405 \u53ea\u8868\u793a\u8def\u5f84/\u57fa\u5740\u4e0d\u5339\u914d\uff08\u4e0d\u4ee3\u8868 Cookie \u65e0\u6548\uff09\uff0c\u4e0d\u53c2\u4e0e\u9274\u6743\u7ed3\u8bba\uff1b"
+                + "\u82e5\u8be5\u884c\u8fd4\u56de 401/403 \u5219\u4ec5\u4f5c\u53c2\u8003\u3002\n");
+        sb.append("\u00b7 \u805a\u5408\u7ed3\u8bba\uff1a\u4e24\u4e2a micloud \u7aef\u70b9 2xx \u2192 \u300c\u9274\u6743\u901a\u8fc7\u300d\uff0c\u8bf7\u76f4\u63a5\u5b9e\u6d4b\u76f8\u518c\u7f16\u8f91"
+                + "\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\uff1b\u4efb\u4e00 micloud 401/403 \u2192 \u7ea2\u8272\u7ed3\u8bba\uff1b\u7f51\u7edc\u95ee\u9898 \u2192 \u65e0\u6cd5\u5224\u5b9a\u3002"
+                + "\u80fd\u5426\u51fa\u56fe\u53d6\u51b3\u4e8e\u670d\u52a1\u7aef\u6743\u76ca/\u8bbe\u5907\u767d\u540d\u5355/\u786c\u4ef6\u8ba4\u8bc1 token\u3002\n");
         sb.append("\u00b7 \u7f51\u9875 Cookie \u5408\u5e76\u4f18\u5148\u7ea7\uff1ai.mi.com > api.open.ai.xiaomi.com > gallery.i.mi.com > account.xiaomi.com > xiaomi.com\uff08\u540c\u540d\u952e\u4fdd\u7559\u9ad8\u4f18\u5148\u7ea7\uff09\uff1b"
-                + "\u754c\u9762\u4f1a\u663e\u793a\u6bcf\u4e2a\u952e\u7684\u6765\u6e90\u57df\u540d\uff0c\u5e76\u63d0\u793a\u662f\u5426\u5b58\u5728\u88ab\u4e22\u5f03\u7684\u8de8\u57df\u91cd\u590d\u952e\u3002\n");
+                + "\u754c\u9762\u4f1a\u663e\u793a\u6765\u6e90\u57df\u540d\u4e0e\u8de8\u57df\u91cd\u590d\u952e\u63d0\u793a\uff08\u4ec5\u952e\u540d\uff09\u3002\n");
         sb.append("\u00b7 \u300c\u590d\u5236\u8bca\u65ad\u4fe1\u606f\u300d\u53ea\u590d\u5236\u7248\u672c\u3001HTTP \u7801\u3001UA \u7c7b\u578b\u3001\u81ea\u68c0\u72b6\u6001\u3001"
-                + "Cookie \u952e\u540d\u4e0e\u957f\u5ea6\u3001\u6765\u6e90\u57df\u540d\uff0c\u4e0d\u5305\u542b\u4efb\u4f55\u4ee4\u724c\u503c\u3002\n");
-        sb.append("\u00b7 \u82e5\u7f51\u9875\u81ea\u68c0 200 \u4f46\u4f53\u68c0 401\uff1a\u8bf4\u660e\u7f51\u9875 Cookie \u4e0e App \u4e91 API \u9274\u6743\u94fe\u8def\u4e0d\u540c\u3002\n\n");
+                + "Cookie \u952e\u540d\u4e0e\u957f\u5ea6\u3001\u6765\u6e90\u57df\u540d\uff0c\u4e0d\u5305\u542b\u4efb\u4f55\u4ee4\u724c\u503c\u3002\n\n");
         sb.append("\u3010\u5b89\u5168\u4e0e\u9690\u79c1\u3011\n");
         sb.append("\u00b7 Cookie \u4ec5\u4fdd\u5b58\u5728\u672c\u673a\u6a21\u5757\u79c1\u6709\u5b58\u50a8\uff1b\u6a21\u5757\u4e0d\u4e0a\u4f20\u3001\u4e0d\u8bb0\u5f55\u4ee4\u724c\u503c"
                 + "\uff08\u754c\u9762\u4ec5\u663e\u793a\u952e\u540d/\u957f\u5ea6\uff0c\u4f53\u68c0\u7ed3\u679c\u5df2\u8131\u654f\uff09\u3002\u8bf7\u4e0d\u8981\u5c06 Cookie \u5206\u4eab\u7ed9\u4ed6\u4eba\u3002\n\n");
