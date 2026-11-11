@@ -167,7 +167,9 @@ public class MainActivity extends Activity {
     private CheckBox cbCookie;
     private CheckBox cbLegendFallback;
     private CheckBox cbLegendCloudParams;
+    private CheckBox cbCameraMakerNote;
     private TextView legendTargetView;
+    private TextView cameraMakerNoteTargetView;
     private TextView helpView;
     private Button helpToggle;
 
@@ -746,6 +748,14 @@ public class MainActivity extends Activity {
         cbLegendCloudParams.setContentDescription("\u542f\u7528 legend \u4e91\u7aef\u53c2\u6570\u8865\u5168\u5f00\u5173");
         body.addView(cbLegendCloudParams);
 
+        cbCameraMakerNote = new CheckBox(this);
+        cbCameraMakerNote.setText("\u540c\u6b65 CN \u76f8\u673a MakerNote \u6807\u7b7e\uff08Moment*\uff0c\u6269\u5c55\u76f8\u673a tag map\uff1b"
+                + "\u9700\u5f3a\u5236\u505c\u6b62\u76f8\u673a/\u91cd\u542f\u751f\u6548\uff09");
+        cbCameraMakerNote.setTextSize(13);
+        cbCameraMakerNote.setTextColor(colorText);
+        cbCameraMakerNote.setContentDescription("\u540c\u6b65 CN \u76f8\u673a MakerNote \u6807\u7b7e\u5f00\u5173");
+        body.addView(cbCameraMakerNote);
+
         CheckBox cbCta = new CheckBox(this);
         cbCta.setText("\u5f3a\u5236 CTA \u5df2\u540c\u610f\uff08\u672c\u7248\u672c\u4e0d\u63d0\u4f9b\uff1bCTA \u4e3a\u6b63\u5e38\u9690\u79c1\u5f39\u7a97\uff09");
         cbCta.setTextSize(13);
@@ -766,6 +776,12 @@ public class MainActivity extends Activity {
         legendTargetView.setTextIsSelectable(true);
         legendTargetView.setPadding(0, dp(6), 0, 0);
         body.addView(legendTargetView);
+
+        cameraMakerNoteTargetView = text("camera_makernote=\uff08\u7b49\u5f85\u76f8\u673a\u8fdb\u7a0b\u4e0a\u62a5\uff09",
+                11, colorTextDim, false);
+        cameraMakerNoteTargetView.setTextIsSelectable(true);
+        cameraMakerNoteTargetView.setPadding(0, dp(4), 0, 0);
+        body.addView(cameraMakerNoteTargetView);
     }
 
     private void buildHelpCard() {
@@ -955,6 +971,8 @@ public class MainActivity extends Activity {
                             cbLegendFallback != null && cbLegendFallback.isChecked())
                     .putBoolean(ModuleConfig.KEY_FORCE_LEGEND_CLOUD_PARAMS,
                             cbLegendCloudParams != null && cbLegendCloudParams.isChecked())
+                    .putBoolean(ModuleConfig.KEY_SYNC_CN_CAMERA_MAKERNOTE,
+                            cbCameraMakerNote != null && cbCameraMakerNote.isChecked())
                     .commit();
         } catch (Throwable t) {
             setActionStatus("\u4fdd\u5b58\u5931\u8d25\uff1a" + t);
@@ -1696,6 +1714,17 @@ public class MainActivity extends Activity {
                 }
             });
         }
+        if (cbCameraMakerNote != null) {
+            cbCameraMakerNote.setChecked(p.getBoolean(ModuleConfig.KEY_SYNC_CN_CAMERA_MAKERNOTE,
+                    ModuleConfig.DEFAULT_SYNC_CN_CAMERA_MAKERNOTE));
+            cbCameraMakerNote.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    updateOverview();
+                    updateStatusPill();
+                }
+            });
+        }
     }
 
     private void updateOverview() {
@@ -1726,6 +1755,17 @@ public class MainActivity extends Activity {
             legendTargetView.setText("legend_fallback_target="
                     + (target == null || target.isEmpty() ? "\uff08\u5c1a\u672a\u4e0a\u62a5\uff09" : target)
                     + "\uff08\u5a92\u4f53\u7f16\u8f91\u5668\u8fdb\u7a0b\u4e0a\u62a5\uff1aCN/GLOBAL/none\uff09");
+        }
+        if (cameraMakerNoteTargetView != null) {
+            String target = "";
+            try {
+                target = ModuleConfig.prefs(this)
+                        .getString(ModuleConfig.KEY_CAMERA_MAKERNOTE_TARGET, "");
+            } catch (Throwable ignored) {
+            }
+            cameraMakerNoteTargetView.setText("camera_makernote="
+                    + (target == null || target.isEmpty() ? "\uff08\u5c1a\u672a\u4e0a\u62a5\uff09" : target)
+                    + "\uff08\u76f8\u673a\u8fdb\u7a0b\u4e0a\u62a5\uff1aCN/GLOBAL/none\uff09");
         }
         if (probing) {
             probeRow.setText("\u68c0\u6d4b\u4e2d\u2026");
@@ -2034,6 +2074,16 @@ public class MainActivity extends Activity {
         }
         sb.append("legend_fallback_target=")
                 .append(legendTarget == null || legendTarget.isEmpty() ? "unknown" : legendTarget)
+                .append('\n');
+        String cameraMakernote = "";
+        try {
+            cameraMakernote = ModuleConfig.prefs(this)
+                    .getString(ModuleConfig.KEY_CAMERA_MAKERNOTE_TARGET, "");
+        } catch (Throwable ignored) {
+        }
+        sb.append("camera_makernote=")
+                .append(cameraMakernote == null || cameraMakernote.isEmpty()
+                        ? "unknown" : cameraMakernote)
                 .append('\n');
         String cloudTrace = readCloudTraceString();
         sb.append("Cloud request trace (last 12; method/host/path/code/cookie only, no query/token/body):\n");
