@@ -165,6 +165,7 @@ public class MainActivity extends Activity {
     private String lastLaunchComponent = "";
     private CheckBox cbGate;
     private CheckBox cbCookie;
+    private CheckBox cbLegendFallback;
     private TextView helpView;
     private Button helpToggle;
 
@@ -603,6 +604,13 @@ public class MainActivity extends Activity {
                 + "\u2463 \u56de\u672c\u9875\u70b9\u300c\u5237\u65b0\u4e91\u7aef\u8f68\u8ff9\u300d\u5e76\u300c\u590d\u5236\u8bca\u65ad\u4fe1\u606f\u300d\u3002", 11, colorTextDim, false);
         usage.setPadding(0, dp(6), 0, 0);
         body.addView(usage);
+
+        TextView fallbackNote = text("\u5df2\u9ed8\u8ba4\u542f\u7528 legend \u7248\u672c\u56de\u843d\uff08force_legend_fallback\uff09\uff1a"
+                + "\u65e0\u4e00\u77ac\u5143\u6570\u636e\u7684\u7167\u7247\u5c06\u8d70 cleaned upload \u515c\u5e95\uff0c"
+                + "\u53ef\u80fd\u4ea7\u751f\u4e00\u6b21\u4e91\u8bf7\u6c42/\u6d88\u8017\u989d\u5ea6\uff1b\u82e5\u670d\u52a1\u7aef\u62d2\u7edd\u5c5e\u6b63\u5e38\u3002"
+                + "\u53ef\u5728 \u2463 \u529f\u80fd\u5f00\u5173\u4e2d\u5173\u95ed\u3002", 11, colorYellow, false);
+        fallbackNote.setPadding(0, dp(6), 0, 0);
+        body.addView(fallbackNote);
     }
 
     private void buildProbeCard() {
@@ -712,6 +720,14 @@ public class MainActivity extends Activity {
         cbCookie.setTextColor(colorText);
         cbCookie.setContentDescription("\u542f\u7528 Cookie \u6ce8\u5165\u5f00\u5173");
         body.addView(cbCookie);
+
+        cbLegendFallback = new CheckBox(this);
+        cbLegendFallback.setText("\u542f\u7528 legend \u7248\u672c\u56de\u843d\u6ce8\u5165\uff08\u65e0\u4e00\u77ac maker note \u7684\u7167\u7247\u8d70 cleaned upload \u515c\u5e95\uff1b"
+                + "\u9ad8\u98ce\u9669\uff1a\u53ef\u80fd\u4ea7\u751f\u4e00\u6b21\u4e91\u8bf7\u6c42/\u6d88\u8017\u989d\u5ea6\uff0c\u670d\u52a1\u7aef\u53ef\u80fd\u62d2\u7edd\uff09");
+        cbLegendFallback.setTextSize(13);
+        cbLegendFallback.setTextColor(colorText);
+        cbLegendFallback.setContentDescription("\u542f\u7528 legend \u7248\u672c\u56de\u843d\u6ce8\u5165\u5f00\u5173");
+        body.addView(cbLegendFallback);
 
         CheckBox cbCta = new CheckBox(this);
         cbCta.setText("\u5f3a\u5236 CTA \u5df2\u540c\u610f\uff08\u672c\u7248\u672c\u4e0d\u63d0\u4f9b\uff1bCTA \u4e3a\u6b63\u5e38\u9690\u79c1\u5f39\u7a97\uff09");
@@ -912,6 +928,8 @@ public class MainActivity extends Activity {
                     .putBoolean(ModuleConfig.KEY_ENABLE_GATE_BYPASS, cbGate.isChecked())
                     .putBoolean(ModuleConfig.KEY_ENABLE_COOKIE, cbCookie.isChecked())
                     .putBoolean(ModuleConfig.KEY_FORCE_CTA, false)
+                    .putBoolean(ModuleConfig.KEY_FORCE_LEGEND_FALLBACK,
+                            cbLegendFallback != null && cbLegendFallback.isChecked())
                     .commit();
         } catch (Throwable t) {
             setActionStatus("\u4fdd\u5b58\u5931\u8d25\uff1a" + t);
@@ -1631,6 +1649,17 @@ public class MainActivity extends Activity {
                 }
             });
         }
+        if (cbLegendFallback != null) {
+            cbLegendFallback.setChecked(p.getBoolean(ModuleConfig.KEY_FORCE_LEGEND_FALLBACK,
+                    ModuleConfig.DEFAULT_FORCE_LEGEND_FALLBACK));
+            cbLegendFallback.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    updateOverview();
+                    updateStatusPill();
+                }
+            });
+        }
     }
 
     private void updateOverview() {
@@ -2095,6 +2124,8 @@ public class MainActivity extends Activity {
                 + "\u2463 \u56de\u672c\u9875\u70b9\u300c\u5237\u65b0\u4e91\u7aef\u8f69\u8ff9\u300d\u5e76\u590d\u5236\u8bca\u65ad\u3002\n");
         sb.append("\u00b7 \u82e5\u542f\u52a8\u5931\u8d25\uff0c\u53ef\u590d\u5236 adb \u547d\u4ee4\uff08am start -n \u7ec4\u4ef6 -d <uri> --grant-read-uri-permission\uff09"
                 + "\u5728 adb shell \u4e2d\u624b\u52a8\u6267\u884c\uff1b\u6a21\u5757\u4e0d\u4f1a\u4fee\u6539\u4efb\u4f55\u7cfb\u7edf\u5c5e\u6027\u3002\n");
+        sb.append("\u00b7 v2.5.1 \u5df2\u9ed8\u8ba4\u542f\u7528 legend \u7248\u672c\u56de\u843d\u6ce8\u5165\uff1a\u65e0\u4e00\u77ac maker note \u7684\u7167\u7247\u5c06\u8d70 cleaned upload \u515c\u5e95\uff0c"
+                + "\u53ef\u80fd\u4ea7\u751f\u4e00\u6b21\u4e91\u8bf7\u6c42/\u6d88\u8017\u989d\u5ea6\uff1b\u82e5\u670d\u52a1\u7aef\u62d2\u7edd\u5c5e\u6b63\u5e38\u3002\n");
         sb.append("\u3010\u5b89\u5168\u4e0e\u9690\u79c1\u3011\n");
         sb.append("\u00b7 Cookie \u4ec5\u4fdd\u5b58\u5728\u672c\u673a\u6a21\u5757\u79c1\u6709\u5b58\u50a8\uff1b\u6a21\u5757\u4e0d\u4e0a\u4f20\u3001\u4e0d\u8bb0\u5f55\u4ee4\u724c\u503c"
                 + "\uff08\u754c\u9762\u4ec5\u663e\u793a\u952e\u540d/\u957f\u5ea6\uff0c\u4f53\u68c0\u7ed3\u679c\u5df2\u8131\u654f\uff09\u3002\u8bf7\u4e0d\u8981\u5c06 Cookie \u5206\u4eab\u7ed9\u4ed6\u4eba\u3002\n\n");
