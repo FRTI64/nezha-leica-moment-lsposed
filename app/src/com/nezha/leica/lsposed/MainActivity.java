@@ -170,9 +170,11 @@ public class MainActivity extends Activity {
     private CheckBox cbLegendCloudParams;
     private CheckBox cbCameraMakerNote;
     private CheckBox cbForceCnEndpoint;
+    private CheckBox cbSimulateCnRegion;
     private TextView legendTargetView;
     private TextView cameraMakerNoteTargetView;
     private TextView cloudEndpointView;
+    private TextView cnRegionView;
     private TextView helpView;
     private Button helpToggle;
 
@@ -798,6 +800,14 @@ public class MainActivity extends Activity {
         cbForceCnEndpoint.setContentDescription("\u5f3a\u5236\u4f7f\u7528 CN \u4e91\u7aef\u70b9\u5f00\u5173");
         body.addView(cbForceCnEndpoint);
 
+        cbSimulateCnRegion = new CheckBox(this);
+        cbSimulateCnRegion.setText("\u6a21\u62df CN \u533a\u57df\uff08\u8ba9\u4e91\u914d\u7f6e\u8fd4\u56de CN \u57fa\u5740\uff1b"
+                + "\u6253\u5f00\u65f6\u628a r21.c.b/gz0.b.b \u7f6e\u4e3a false\uff09");
+        cbSimulateCnRegion.setTextSize(13);
+        cbSimulateCnRegion.setTextColor(colorText);
+        cbSimulateCnRegion.setContentDescription("\u6a21\u62df CN \u533a\u57df\u5f00\u5173");
+        body.addView(cbSimulateCnRegion);
+
         CheckBox cbCta = new CheckBox(this);
         cbCta.setText("\u5f3a\u5236 CTA \u5df2\u540c\u610f\uff08\u672c\u7248\u672c\u4e0d\u63d0\u4f9b\uff1bCTA \u4e3a\u6b63\u5e38\u9690\u79c1\u5f39\u7a97\uff09");
         cbCta.setTextSize(13);
@@ -830,6 +840,12 @@ public class MainActivity extends Activity {
         cloudEndpointView.setTextIsSelectable(true);
         cloudEndpointView.setPadding(0, dp(4), 0, 0);
         body.addView(cloudEndpointView);
+
+        cnRegionView = text("cn_region=\uff08\u7b49\u5f85\u5a92\u4f53\u7f16\u8f91\u5668\u4e0a\u62a5\uff09",
+                11, colorTextDim, false);
+        cnRegionView.setTextIsSelectable(true);
+        cnRegionView.setPadding(0, dp(4), 0, 0);
+        body.addView(cnRegionView);
     }
 
     private void buildHelpCard() {
@@ -1023,6 +1039,8 @@ public class MainActivity extends Activity {
                             cbCameraMakerNote != null && cbCameraMakerNote.isChecked())
                     .putBoolean(ModuleConfig.KEY_FORCE_CN_CLOUD_ENDPOINT,
                             cbForceCnEndpoint != null && cbForceCnEndpoint.isChecked())
+                    .putBoolean(ModuleConfig.KEY_SIMULATE_CN_REGION,
+                            cbSimulateCnRegion != null && cbSimulateCnRegion.isChecked())
                     .commit();
         } catch (Throwable t) {
             setActionStatus("\u4fdd\u5b58\u5931\u8d25\uff1a" + t);
@@ -1764,6 +1782,17 @@ public class MainActivity extends Activity {
                 }
             });
         }
+        if (cbSimulateCnRegion != null) {
+            cbSimulateCnRegion.setChecked(p.getBoolean(ModuleConfig.KEY_SIMULATE_CN_REGION,
+                    ModuleConfig.DEFAULT_SIMULATE_CN_REGION));
+            cbSimulateCnRegion.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    updateOverview();
+                    updateStatusPill();
+                }
+            });
+        }
         if (cbForceCnEndpoint != null) {
             cbForceCnEndpoint.setChecked(p.getBoolean(ModuleConfig.KEY_FORCE_CN_CLOUD_ENDPOINT,
                     ModuleConfig.DEFAULT_FORCE_CN_CLOUD_ENDPOINT));
@@ -1838,6 +1867,17 @@ public class MainActivity extends Activity {
             cloudEndpointView.setText("cloud_endpoint="
                     + (target == null || target.isEmpty() ? "\uff08\u5c1a\u672a\u4e0a\u62a5\uff09" : target)
                     + "\uff08\u5a92\u4f53\u7f16\u8f91\u5668\u8fdb\u7a0b\u4e0a\u62a5\uff1b\u91cd\u5199\u540e\u4e3a CN \u5730\u5740\uff09");
+        }
+        if (cnRegionView != null) {
+            String region = "";
+            try {
+                region = ModuleConfig.prefs(this)
+                        .getString(ModuleConfig.KEY_CN_REGION, "");
+            } catch (Throwable ignored) {
+            }
+            cnRegionView.setText("cn_region="
+                    + (region == null || region.isEmpty() ? "\uff08\u5c1a\u672a\u4e0a\u62a5\uff09" : region)
+                    + "\uff08simulated/off/none\uff0c\u5a92\u4f53\u7f16\u8f91\u5668\u8fdb\u7a0b\u4e0a\u62a5\uff09");
         }
         if (probing) {
             probeRow.setText("\u68c0\u6d4b\u4e2d\u2026");
@@ -2189,6 +2229,15 @@ public class MainActivity extends Activity {
         sb.append("cloud_endpoint=")
                 .append(cloudEndpoint == null || cloudEndpoint.isEmpty()
                         ? "unknown" : cloudEndpoint)
+                .append('\n');
+        String cnRegion = "";
+        try {
+            cnRegion = ModuleConfig.prefs(this)
+                    .getString(ModuleConfig.KEY_CN_REGION, "");
+        } catch (Throwable ignored) {
+        }
+        sb.append("cn_region=")
+                .append(cnRegion == null || cnRegion.isEmpty() ? "unknown" : cnRegion)
                 .append('\n');
         String cloudTrace = readCloudTraceString();
         sb.append("Cloud request trace (last 12; method/host/path/code/cookie only, no query/token/body):\n");
