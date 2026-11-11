@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "2.5.3";
+    public static final String MODULE_VERSION = "2.6.0";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
@@ -29,6 +29,8 @@ public final class ModuleConfig {
     public static final String METHOD_GET_CLOUD_TRACE = "get_cloud_trace";
     /** mediaeditor process reports which legend-fallback variant matched (CN|GLOBAL|none). */
     public static final String METHOD_SET_LEGEND_FALLBACK_TARGET = "set_legend_fallback_target";
+    /** camera process reports which MakerNote tag-map variant was extended (CN|GLOBAL|none). */
+    public static final String METHOD_SET_CAMERA_MAKERNOTE_TARGET = "set_camera_makernote_target";
 
     public static final String KEY_COOKIE = "cookie";
     public static final String KEY_ENABLE_GATE_BYPASS = "enable_gate_bypass";
@@ -42,10 +44,14 @@ public final class ModuleConfig {
     public static final String KEY_FORCE_LEGEND_FALLBACK = "force_legend_fallback";
     /** v2.5.3: fill missing CreateLegendV2TaskParams (aperture/focus/oaid) at job time. Default true. */
     public static final String KEY_FORCE_LEGEND_CLOUD_PARAMS = "force_legend_cloud_params";
+    /** v2.6.0: extend camera MakerNote tag map with CN-only Moment* tags. Default true. */
+    public static final String KEY_SYNC_CN_CAMERA_MAKERNOTE = "sync_cn_camera_makernote";
     /** Newline-joined cloud request trace lines (no token values). */
     public static final String KEY_CLOUD_TRACE = "cloud_trace";
     /** CN | GLOBAL | none (which legend-fallback hook variant matched on device). */
     public static final String KEY_LEGEND_FALLBACK_TARGET = "legend_fallback_target";
+    /** CN | GLOBAL | none (which camera MakerNote map was extended). */
+    public static final String KEY_CAMERA_MAKERNOTE_TARGET = "camera_makernote";
 
     /** Defaults (also used when the provider is unreachable). */
     public static final boolean DEFAULT_ENABLE_GATE_BYPASS = true;
@@ -53,6 +59,7 @@ public final class ModuleConfig {
     public static final boolean DEFAULT_FORCE_CTA = false;
     public static final boolean DEFAULT_FORCE_LEGEND_FALLBACK = true;
     public static final boolean DEFAULT_FORCE_LEGEND_CLOUD_PARAMS = true;
+    public static final boolean DEFAULT_SYNC_CN_CAMERA_MAKERNOTE = true;
 
     private ModuleConfig() {
     }
@@ -83,8 +90,11 @@ public final class ModuleConfig {
                 p.getBoolean(KEY_FORCE_LEGEND_FALLBACK, DEFAULT_FORCE_LEGEND_FALLBACK));
         b.putBoolean("force_legend_cloud_params",
                 p.getBoolean(KEY_FORCE_LEGEND_CLOUD_PARAMS, DEFAULT_FORCE_LEGEND_CLOUD_PARAMS));
+        b.putBoolean("sync_cn_camera_makernote",
+                p.getBoolean(KEY_SYNC_CN_CAMERA_MAKERNOTE, DEFAULT_SYNC_CN_CAMERA_MAKERNOTE));
         b.putString("cloud_trace", p.getString(KEY_CLOUD_TRACE, ""));
         b.putString("legend_fallback_target", p.getString(KEY_LEGEND_FALLBACK_TARGET, ""));
+        b.putString("camera_makernote", p.getString(KEY_CAMERA_MAKERNOTE_TARGET, ""));
         b.putString("module_version", MODULE_VERSION);
         return b;
     }
