@@ -229,6 +229,27 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static volatile String sLastCloudEndpointOld = "";
     private static volatile boolean sCloudEndpointWarned;
 
+    /** v2.7.2: region/country SystemProperties used by the cloud-config layer. */
+    private static final String SYS_PROP_CLASS = "android.os.SystemProperties";
+    private static final String PROP_MIUI_BUILD_REGION = "ro.miui.build.region";
+    private static final String PROP_MIUI_REGION = "ro.miui.region";
+    private static final String PROP_VENDOR_MIUI_REGION = "ro.vendor.miui.region";
+    private static final String PROP_PRODUCT_LOCALE_REGION = "ro.product.locale.region";
+    private static final String PROP_VENDOR_RADIO_BUILD_REGION = "ro.vendor.radio.build_region";
+    private static final String PROP_RIL_REGION = "ro.ril.region";
+    private static final String[][] REGION_PROP_EXACT = new String[][]{
+            {PROP_MIUI_BUILD_REGION, "cn"},
+            {PROP_MIUI_REGION, "CN"},
+            {PROP_VENDOR_MIUI_REGION, "CN"},
+            {PROP_PRODUCT_LOCALE_REGION, "CN"},
+            {PROP_VENDOR_RADIO_BUILD_REGION, "CN"},
+            {PROP_RIL_REGION, "CN"}
+    };
+    private static final ThreadLocal<Boolean> sSysPropRewriteGuard = new ThreadLocal<Boolean>();
+    private static final java.util.Set<String> sLoggedRegionProps = new java.util.HashSet<String>();
+    private static final java.util.Set<String> sLoggedRegionRewrites = new java.util.HashSet<String>();
+    private static volatile boolean sSysPropWarned;
+
     /** v2.7.1: simulate CN region flag used by the cloud-config layer. */
     private static final String[][] CN_REGION_CLASSES = new String[][]{
             {"GLOBAL", "r21.c"},
@@ -297,6 +318,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookAiAvatarResponseEntity(lpparam);
             hookRetrofitHttpException(lpparam);
             hookCnRegionSimulation(lpparam);
+            hookSystemPropertiesRegion(lpparam);
             hookCloudEndpointRedirect(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
@@ -1962,6 +1984,140 @@ public class HookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             logcatWarn("cn_region report failed", t);
         }
+    }
+
+    /**
+     * v2.7.2: hooks android.os.SystemProperties.get (1-arg and 2-arg) in the
+     * mediaeditor process. Logs region/country/locale property reads (distinct,
+     * with current value) and, when simulate_cn_region is ON, rewrites
+     * region/country properties to CN values (runtime-only; no persisted
+     * property changes). Re-asserts the cloud-config isGlobal flag too.
+     */
+    private static void hookSystemPropertiesRegion(XC_LoadPackage.LoadPackageParam lpparam) {
+        Class<?> cls;
+        try {
+            cls = XposedHelpers.findClass(SYS_PROP_CLASS, lpparam.classLoader);
+        } catch (Throwable t) {
+            log("region prop: class " + SYS_PROP_CLASS + " not found (skip)");
+            return;
+        }
+        int hooked = 0;
+        Method[] methods = cls.getDeclaredMethods();
+        for (int i = 0; i < methods.length; i++) {
+            final Method m = methods[i];
+            try {
+                if (!m.getName().equals("get")) {
+                    continue;
+                }
+                Class<?>[] ps = m.getParameterTypes();
+                if (ps.length != 1 && ps.length != 2) {
+                    continue;
+                }
+                if (ps[0] != String.class) {
+                    continue;
+                }
+                if (ps.length == 2 && ps[1] != String.class) {
+                    continue;
+                }
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            Object first = param.args != null && param.args.length > 0
+                                    ? param.args[0] : null;
+                            if (!(first instanceof String)) {
+                                return;
+                            }
+                            String name = (String) first;
+                            if (name == null || name.isEmpty()) {
+                                return;
+                            }
+                            // Gate: only log/rewrite when CN region simulation is ON.
+                            if (!simulateCnRegionEnabled()) {
+                                return;
+                            }
+                            String lower = name.toLowerCase(Locale.US);
+                            boolean interesting = lower.contains("region")
+                                    || lower.contains("country")
+                                    || lower.contains("locale");
+                            if (!interesting) {
+                                return;
+                            }
+                            if (Boolean.TRUE.equals(sSysPropRewriteGuard.get())) {
+                                // Re-entrant read from inside our own logging: let original run.
+                                return;
+                            }
+                            String originalValue = "";
+                            try {
+                                sSysPropRewriteGuard.set(Boolean.TRUE);
+                                Object v = XposedHelpers.callStaticMethod(cls, "get", name);
+                                originalValue = v == null ? "" : String.valueOf(v);
+                            } catch (Throwable ignored) {
+                            } finally {
+                                sSysPropRewriteGuard.remove();
+                            }
+                            logRegionPropOnce(name, originalValue);
+                            if (lower.contains("region") || lower.contains("country")) {
+                                String cnValue = regionPropCnValue(lower);
+                                if (cnValue != null) {
+                                    param.setResult(cnValue);
+                                    assertCnRegion();
+                                    logRegionRewriteOnce(name, originalValue, cnValue);
+                                }
+                            }
+                        } catch (Throwable t) {
+                            if (!sSysPropWarned) {
+                                sSysPropWarned = true;
+                                logcatWarn("region prop hook failed (fail-safe)", t);
+                            }
+                        }
+                    }
+                });
+                hooked++;
+                log("sysprop region hook installed: " + SYS_PROP_CLASS + ".get params=" + ps.length);
+            } catch (Throwable t) {
+                log("sysprop region hook failed: " + t);
+            }
+        }
+        if (hooked == 0) {
+            log("WARN: SystemProperties.get(String[,String]) not hooked");
+        }
+    }
+
+    private static void logRegionPropOnce(String name, String value) {
+        synchronized (sLoggedRegionProps) {
+            if (sLoggedRegionProps.size() >= 20 || sLoggedRegionProps.contains(name)) {
+                return;
+            }
+            sLoggedRegionProps.add(name);
+            dualLog("region prop: " + name + "=" + value);
+        }
+    }
+
+    private static void logRegionRewriteOnce(String name, String oldValue, String newValue) {
+        synchronized (sLoggedRegionRewrites) {
+            if (sLoggedRegionRewrites.size() >= 20 || sLoggedRegionRewrites.contains(name)) {
+                return;
+            }
+            sLoggedRegionRewrites.add(name);
+            dualLog("region prop rewritten: " + name + " " + oldValue + " -> " + newValue);
+        }
+    }
+
+    /** CN value for a region/country property (null = do not rewrite). */
+    private static String regionPropCnValue(String lowerName) {
+        for (int i = 0; i < REGION_PROP_EXACT.length; i++) {
+            if (REGION_PROP_EXACT[i][0].toLowerCase(Locale.US).equals(lowerName)) {
+                return REGION_PROP_EXACT[i][1];
+            }
+        }
+        if (lowerName.contains("country")) {
+            return "CN";
+        }
+        if (lowerName.contains("region")) {
+            return "CN";
+        }
+        return null;
     }
 
     private static void hookCloudEndpointRedirect(XC_LoadPackage.LoadPackageParam lpparam) {
