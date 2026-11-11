@@ -1,12 +1,12 @@
 # nezha-leica-moment-lsposed
 
-**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.7.0 —— 零属性伪装**
+**Xiaomi 17 Ultra（`nezha`）「徕卡一瞬 / 相册编辑·二次增强」LSPosed 模块 v2.7.1 —— 零属性伪装**
 
 > ✅ 不 resetprop、不 hook `SystemProperties`、不修改任何 `ro.*` 属性：改为**直接 hook App 内部判定方法**返回 true（仅影响被 hook 进程）。
 > 同时保留小米账号 Cookie 登录/注入、未登录兜底；**v2.4.0 按用户要求彻底移除系统账号 Cookie 路径**（Cookie 来源仅限手动粘贴/全屏网页登录），并新增**网页会话自检**；v2.3.0 的全屏登录与 UA 自适应体检保留；v2.2.2 修复 Cookie 体检误报（真实鉴权信号端点 + UA 自适应）；v2.2.1 修复 STS 网页错误（`net::ERR_HTTP_RESPONSE_CODE_FAILURE`，旧版 sign=x 占位符问题）；v2.2.0 新增 **Cookie 体检（只读 GET 探测）**、**WebView STS 助手（补 serviceToken）** 与**卡片式新 UI**。CTA 不强制、不伪造硬件认证、不绕过服务端权益。
 
 - 目标：`com.miui.mediaeditor`（相册-编辑，国际版 2.10.40.4.8-global / 国行 2.10.43.0.6）；可选 `com.android.camera`（配 Magisk CameraOnly 提供国行 MiuiCamera 6.7 APK）。
-- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.7.0.apk`（70,244 B，sha256 `058c4466…eb7b`，versionCode 21）。
+- 预构建 APK：`prebuilt/LeicaMoment_LSPosed_v2.7.1.apk`（74,340 B，sha256 `0069facb…2755`，versionCode 22）。
 - 未真机验证；仅供个人设备本地研究与自用修改。
 
 ---
@@ -84,6 +84,10 @@ VERSION_CODE=5 VERSION_NAME=2.1.0 ./build.sh app dist/LeicaMoment_LSPosed_v2.1.0
 - apksigner `Verifies`（v1+v2+v3，`--min-sdk-version 21`）；`aapt2 dump badging` 正常；dex 内 0 个 `de.robv` 类定义。
 - dex 中**不存在** `ro.theme_customize`/`ro.miui.build.region`/`ro.theme_leica`/`ro.special_edition`/`SPOOF_PROPS`/`hookSystemProperties`/`resetprop`（零属性伪装证据）。
 - Hook 目标均有两版 smali 证据（`docs/`）。
+
+## 5.17 v2.7.1 新增：模拟 CN 区域获取真实 CN 云基址
+
+v2.7.0 硬编码 CN 端点 404 → 真正 CN AI 照片云基址由区域云配置下发。GLOBAL 云配置工具 `jq.d.a` 读 `r21.c.b`（isGlobal），CN `nm.c.a` 读 `gz0.b.b`。v2.7.1 把该静态布尔置 false（并在 beforeHook 反复置位），让云配置按 CN 区域下发真实 CN 基址；开关 `simulate_cn_region`（默认开）、诊断 `cn_region=`；`force_cn_cloud_endpoint` 改默认关。用 logcat 的 `cloudConfigProductUrl:` 验证是否变成 CN 域名。
 
 ## 5.16 最终结论（真机实测，v2.7.0）
 
