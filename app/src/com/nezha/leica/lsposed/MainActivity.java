@@ -166,6 +166,7 @@ public class MainActivity extends Activity {
     private CheckBox cbGate;
     private CheckBox cbCookie;
     private CheckBox cbLegendFallback;
+    private CheckBox cbLegendCloudParams;
     private TextView legendTargetView;
     private TextView helpView;
     private Button helpToggle;
@@ -612,6 +613,13 @@ public class MainActivity extends Activity {
                 + "\u53ef\u5728 \u2463 \u529f\u80fd\u5f00\u5173\u4e2d\u5173\u95ed\u3002", 11, colorYellow, false);
         fallbackNote.setPadding(0, dp(6), 0, 0);
         body.addView(fallbackNote);
+
+        TextView paramsNote = text("v2.5.3\uff1a\u5df2\u542f\u7528 legend \u4e91\u7aef\u53c2\u6570\u8865\u5168"
+                + "\uff08aperture/focusX/focusY/oaid \u4e3a\u7a7a\u65f6\u81ea\u52a8\u8865\u9ed8\u8ba4\u503c\uff09\uff1b"
+                + "AI \u4e91\u8bf7\u6c42\u7684\u54cd\u5e94 body \u7247\u6bb5\u5df2\u52a0\u5165\u300c\u5237\u65b0\u4e91\u7aef\u8f68\u8ff9\u300d\u3002",
+                11, colorTextDim, false);
+        paramsNote.setPadding(0, dp(4), 0, 0);
+        body.addView(paramsNote);
     }
 
     private void buildProbeCard() {
@@ -729,6 +737,14 @@ public class MainActivity extends Activity {
         cbLegendFallback.setTextColor(colorText);
         cbLegendFallback.setContentDescription("\u542f\u7528 legend \u7248\u672c\u56de\u843d\u6ce8\u5165\u5f00\u5173");
         body.addView(cbLegendFallback);
+
+        cbLegendCloudParams = new CheckBox(this);
+        cbLegendCloudParams.setText("\u542f\u7528 legend \u4e91\u7aef\u53c2\u6570\u8865\u5168\uff08CreateLegendV2TaskParams \u7684 aperture/focusX/focusY/oaid "
+                + "\u4e3a\u7a7a\u65f6\u8865\u9ed8\u8ba4\u503c\uff1b\u54cd\u5e94 body \u7247\u6bb5\u4f1a\u52a0\u5165\u4e91\u7aef\u8f68\u8ff9\uff09");
+        cbLegendCloudParams.setTextSize(13);
+        cbLegendCloudParams.setTextColor(colorText);
+        cbLegendCloudParams.setContentDescription("\u542f\u7528 legend \u4e91\u7aef\u53c2\u6570\u8865\u5168\u5f00\u5173");
+        body.addView(cbLegendCloudParams);
 
         CheckBox cbCta = new CheckBox(this);
         cbCta.setText("\u5f3a\u5236 CTA \u5df2\u540c\u610f\uff08\u672c\u7248\u672c\u4e0d\u63d0\u4f9b\uff1bCTA \u4e3a\u6b63\u5e38\u9690\u79c1\u5f39\u7a97\uff09");
@@ -937,6 +953,8 @@ public class MainActivity extends Activity {
                     .putBoolean(ModuleConfig.KEY_FORCE_CTA, false)
                     .putBoolean(ModuleConfig.KEY_FORCE_LEGEND_FALLBACK,
                             cbLegendFallback != null && cbLegendFallback.isChecked())
+                    .putBoolean(ModuleConfig.KEY_FORCE_LEGEND_CLOUD_PARAMS,
+                            cbLegendCloudParams != null && cbLegendCloudParams.isChecked())
                     .commit();
         } catch (Throwable t) {
             setActionStatus("\u4fdd\u5b58\u5931\u8d25\uff1a" + t);
@@ -1660,6 +1678,17 @@ public class MainActivity extends Activity {
             cbLegendFallback.setChecked(p.getBoolean(ModuleConfig.KEY_FORCE_LEGEND_FALLBACK,
                     ModuleConfig.DEFAULT_FORCE_LEGEND_FALLBACK));
             cbLegendFallback.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    updateOverview();
+                    updateStatusPill();
+                }
+            });
+        }
+        if (cbLegendCloudParams != null) {
+            cbLegendCloudParams.setChecked(p.getBoolean(ModuleConfig.KEY_FORCE_LEGEND_CLOUD_PARAMS,
+                    ModuleConfig.DEFAULT_FORCE_LEGEND_CLOUD_PARAMS));
+            cbLegendCloudParams.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     updateOverview();
