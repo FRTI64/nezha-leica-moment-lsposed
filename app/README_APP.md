@@ -10,9 +10,9 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.7.2.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 23 / versionName 2.7.2，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.7.1）已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.7.3.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 24 / versionName 2.7.3，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.7.2）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
    v2.4.0 重点：**彻底移除系统账号 Cookie 路径**（不读取/不捕获/不保存系统账号 STS Cookie）；
    Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）。
@@ -73,6 +73,12 @@
    （`ro.miui.build.region`→`cn`，`ro.miui.region`/`ro.product.locale.region`/`ro.vendor.miui.region`/
    `ro.vendor.radio.build_region`/`ro.ril.region` 及任意 `*region*`/`*country*`→`CN`），并再次断言
    `r21.c.b=false`。验证前建议执行一次 `su -c "pm clear com.miui.mediaeditor"` 强制重新拉取云配置。
+   v2.7.3 新增 **通用 HTTP 轨迹 + 原生 Cookie 键名**：hook 混淆 OkHttp Response `b11.e0` 的 13 参构造器，
+   对 URL 含 aiPhotoCloud/legend/auth/v1/hardware/sec.miui.com 的响应打印并保存
+   `http_trace <code> <url> headers={…}`（仅保留 `www-authenticate`/`x-*`/`server`/`content-type`/
+   `content-length`/`retry-after`，单条 120、总 400 字符；**绝不记录 set-cookie/cookie/authorization 值**）；
+   Cookie 注入关闭时打印一次 `native cookie: length=<n> keys=<键名>`（仅键名、无值），用于确认系统账号
+   Cookie 是否带 sec/security token。logcat 过滤：`http_trace|native cookie`。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -331,6 +337,11 @@ HyperOS 4 引入了大量 Rust 组件：
   `cloud endpoint rewritten: …` 与 `cloud_resp_body=`/`resp_entity`/`http_error`。
   若 CN 端点返回区域/账号类错误（如 region mismatch / 无权益），将 `resp_entity code=… msg=…`
   或 `cloud_resp_body=` 发回分析（这属于服务端策略，客户端无法绕过）。
+- **HTTP 轨迹与原生 Cookie（v2.7.3）**：区域模拟后若云端返回 401，logcat 过滤
+  `su -c "logcat -d | grep -E 'http_trace|native cookie|LeicaMoment|LSPosed-Bridge' | tail -100"`
+  查看完整请求序列（hardwareNonce/hardwareAuthToken/upload/create）的 `http_trace <code> <url> headers={…}`，
+  以及 `native cookie: length=… keys=…` 是否包含 sec/security 类键。注意：headers 只含白名单字段，
+  绝不含 cookie/authorization 值。
 - **日志排障（v2.6.2）**：若「云端报文捕获/云端轨迹」仍显示暂无，用 adb 抓 logcat：
   `su -c "logcat -d | grep -E 'LeicaMoment|LSPosed-Bridge' | tail -60"`
   重点看 `create_params final:` / `legend_create_body=` / `cloud_resp_body=` / `resp_entity code=` /
@@ -421,6 +432,7 @@ HyperOS 4 引入了大量 Rust 组件：
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
 | 拍摄的一瞬照片没有 Moment 元数据（媒体编辑器仍报 legendInfo null / 图片解析失败） | v2.6.0 默认启用 CN/Global 相机 MakerNote 标签同步；请确认 ④ 开关 `sync_cn_camera_makernote` 开启、诊断显示 `camera_makernote=GLOBAL`（或 CN），并**强制停止相机/重启**使相机进程重新加载模块；再用相机拍一张正常亮度、未编辑的徕卡一瞬照片测试。 |
+| 区域模拟成功但 legendV2 仍 401 | v2.7.3 会打印 `http_trace`（URL/状态码/白名单响应头）与 `native cookie`（长度+键名）。请关闭 Cookie 注入（④ 功能开关）后重试，收集 `su -c "logcat -d | grep -E 'http_trace|native cookie' | tail -100"` 发回：重点看 401 的 `www-authenticate`/`x-*` 头、系统账号 Cookie 是否含 sec/security token，以及 hardwareNonce/hardwareAuthToken 调用是否成功。 |
 | 区域模拟后 cloudConfigProductUrl 仍是 intl | v2.7.2 起会打印 `region prop: <name>=<value>`（最多20个不同名字）并按 CN 重写 region/country 属性；请先 `su -c "pm clear com.miui.mediaeditor"` 清配置缓存、强制停止 mediaeditor 后重试，并把含 `region prop` / `cloudConfigProductUrl:` / `cn_region=` / `cloud_endpoint=` 的 logcat 发回。 |
 | 云配置是否真的返回了 CN 基址 | v2.7.1 默认「模拟 CN 区域」开启；logcat 搜索 App 自己的 `cloudConfigProductUrl:`，应为 CN 主机（不含 `intl.miui.com`）；模块同时打印 `cn region simulated: <class>.b=false`、`cloud_endpoint=…`，诊断显示 `cn_region=simulated`。若仍为 intl：确认 ④ 两个开关状态、强制停止 mediaeditor 后重试，并把 logcat 发回。 |
 | 想确认云请求到底发往哪个端点 | v2.7.0 起在 ④/「复制诊断信息」查看 `cloud_endpoint=`；logcat 看 `cloud endpoint rewrite target class=…` 与 `cloud endpoint rewritten: <旧> -> https://api.open.ai.xiaomi.com`。开启 `force_cn_cloud_endpoint`（默认）= CN 端点，关闭 = 国际端点（A/B 对照）。 |
