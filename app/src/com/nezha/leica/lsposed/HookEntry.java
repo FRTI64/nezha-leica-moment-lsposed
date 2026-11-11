@@ -5,6 +5,7 @@ import android.os.Bundle;
 
 import android.app.AndroidAppHelper;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -14,6 +15,7 @@ import java.util.ArrayDeque;
 import java.util.Date;
 import java.util.UUID;
 import java.util.Locale;
+import java.util.Map;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -193,6 +195,19 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static volatile boolean sLegendCloudParamsLogged;
     private static volatile boolean sLegendCloudParamsWarned;
 
+    /** v2.6.0: camera MakerNote tag-map sync (CN Bf.g / GLOBAL Ig.g). */
+    private static final String[][] CAMERA_MAKERNOTE_CLASSES = new String[][]{
+            {"CN", "Bf.g"},
+            {"GLOBAL", "Ig.g"}
+    };
+    private static final String[] CAMERA_MOMENT_TAG_NAMES = new String[]{
+            "MomentVersion", "MomentType", "MomentSubMode", "MomentPro",
+            "MomentBokehDepthVersion"
+    };
+    private static final int[] CAMERA_MOMENT_TAG_IDS = new int[]{0x30, 0x31, 0x32, 0x33, 0x34};
+    private static final int CAMERA_MOMENT_TAG_TYPE = 4;
+    private static volatile boolean sCameraMakerNoteWarned;
+
     private static volatile Constructor<?> sLegendCtor;
     private static volatile Object sLegendV2;
     private static volatile Object sLegendM3;
@@ -226,6 +241,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                 // CN MiuiCamera mounted by the Magisk CameraOnly variant: force only the
                 // app's own Java gates; no property reads or writes anywhere.
                 hookCameraGates(lpparam);
+                hookCameraMakerNoteMap(lpparam);
                 log("camera: all hook installers finished for " + pkg);
                 return;
             }
@@ -312,6 +328,194 @@ public class HookEntry implements IXposedHookLoadPackage {
                     ModuleConfig.DEFAULT_ENABLE_GATE_BYPASS);
         } catch (Throwable t) {
             return true;
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // (1a.5) Camera Xiaomi MakerNote tag-map sync (v2.6.0: CN -> GLOBAL)
+    // ---------------------------------------------------------------------
+
+    /**
+     * The GLOBAL MiuiCamera 6.6 maker-note tag map only registers the 5 HdrDisplay
+     * tags; the CN camera 6.7 additionally registers the 5 Moment* tags
+     * (0x30..0x34, type 4). Its ExifToolBuild re-serializes the maker note from the
+     * parsed map, so unknown Moment tags are dropped on save. Extending the map
+     * makes the global camera PRESERVE/re-serialize HAL-written Moment tags.
+     * Candidate map classes: CN Bf.g, GLOBAL Ig.g. Fully fail-safe.
+     */
+    private static void hookCameraMakerNoteMap(XC_LoadPackage.LoadPackageParam lpparam) {
+        if (!syncCameraMakerNoteEnabled()) {
+            log("camera makernote sync disabled (sync_cn_camera_makernote=off)");
+            reportCameraMakerNoteTarget("none");
+            return;
+        }
+        for (int v = 0; v < CAMERA_MAKERNOTE_CLASSES.length; v++) {
+            String label = CAMERA_MAKERNOTE_CLASSES[v][0];
+            String className = CAMERA_MAKERNOTE_CLASSES[v][1];
+            Class<?> cls;
+            try {
+                cls = XposedHelpers.findClass(className, lpparam.classLoader);
+            } catch (Throwable t) {
+                log("camera makernote: " + label + " class " + className
+                        + " not present (skip)");
+                continue;
+            }
+            try {
+                boolean extended = extendCameraMakerNoteMaps(cls, className, label);
+                reportCameraMakerNoteTarget(label);
+                if (extended) {
+                    log("camera makernote map extended: +5 Moment tags (" + label
+                            + "=" + className + ")");
+                } else {
+                    log("camera makernote map already contains Moment tags or was not modifiable ("
+                            + label + "=" + className + ")");
+                }
+                return;
+            } catch (Throwable t) {
+                if (!sCameraMakerNoteWarned) {
+                    sCameraMakerNoteWarned = true;
+                    log("camera makernote map extension failed (fail-safe skip): " + t);
+                }
+                reportCameraMakerNoteTarget("none");
+                return;
+            }
+        }
+        reportCameraMakerNoteTarget("none");
+        log("WARN: no camera makernote map class matched (CN Bf.g / GLOBAL Ig.g absent)");
+    }
+
+    private static boolean syncCameraMakerNoteEnabled() {
+        try {
+            return config().getBoolean("sync_cn_camera_makernote",
+                    ModuleConfig.DEFAULT_SYNC_CN_CAMERA_MAKERNOTE);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean extendCameraMakerNoteMaps(Class<?> cls, String className, String label)
+            throws Throwable {
+        Object dObj = null;
+        Object eObj = null;
+        try {
+            dObj = XposedHelpers.getStaticObjectField(cls, "d");
+        } catch (Throwable ignored) {
+        }
+        try {
+            eObj = XposedHelpers.getStaticObjectField(cls, "e");
+        } catch (Throwable ignored) {
+        }
+        if (!(dObj instanceof Map) && !(eObj instanceof Map)) {
+            log("camera makernote: " + className + " has no static map d/e fields");
+            return false;
+        }
+        Map<Object, Object> dMap = (dObj instanceof Map) ? (Map<Object, Object>) dObj : null;
+        Map<Object, Object> eMap = (eObj instanceof Map) ? (Map<Object, Object>) eObj : null;
+
+        Class<?> entryClass = null;
+        if (dMap != null && !dMap.isEmpty()) {
+            Object first = dMap.values().iterator().next();
+            if (first != null) {
+                entryClass = first.getClass();
+            }
+        }
+        if (entryClass == null && eMap != null && !eMap.isEmpty()) {
+            Object first = eMap.values().iterator().next();
+            if (first != null) {
+                entryClass = first.getClass();
+            }
+        }
+        if (entryClass == null) {
+            String entryName = "CN".equals(label) ? "Bf.b$e" : "Ig.b$e";
+            try {
+                entryClass = XposedHelpers.findClass(entryName, cls.getClassLoader());
+            } catch (Throwable t) {
+                log("camera makernote: entry class " + entryName + " not found");
+                return false;
+            }
+        }
+
+        Constructor<?> ctor = null;
+        Constructor<?>[] ctors = entryClass.getDeclaredConstructors();
+        for (int i = 0; i < ctors.length; i++) {
+            Class<?>[] ps = ctors[i].getParameterTypes();
+            if (ps.length == 3 && ps[0] == String.class
+                    && ps[1] == int.class && ps[2] == int.class) {
+                ctor = ctors[i];
+                break;
+            }
+        }
+        if (ctor == null) {
+            log("camera makernote: no (String,int,int) constructor on " + entryClass.getName());
+            return false;
+        }
+        try {
+            ctor.setAccessible(true);
+        } catch (Throwable ignored) {
+        }
+
+        int added = 0;
+        Object[] newEntries = new Object[CAMERA_MOMENT_TAG_IDS.length];
+        int newEntryCount = 0;
+        for (int i = 0; i < CAMERA_MOMENT_TAG_IDS.length; i++) {
+            String name = CAMERA_MOMENT_TAG_NAMES[i];
+            int id = CAMERA_MOMENT_TAG_IDS[i];
+            Object entry = null;
+            if (dMap != null) {
+                entry = dMap.get(Integer.valueOf(id));
+            }
+            if (entry == null && eMap != null) {
+                entry = eMap.get(name);
+            }
+            if (entry == null) {
+                entry = ctor.newInstance(name, Integer.valueOf(id),
+                        Integer.valueOf(CAMERA_MOMENT_TAG_TYPE));
+                added++;
+            }
+            if (dMap != null && !dMap.containsKey(Integer.valueOf(id))) {
+                dMap.put(Integer.valueOf(id), entry);
+            }
+            if (eMap != null && !eMap.containsKey(name)) {
+                eMap.put(name, entry);
+            }
+            newEntries[newEntryCount++] = entry;
+        }
+        if (added == 0) {
+            return false;
+        }
+        // Optional: append the new entries to the static array c (rebuilt).
+        try {
+            Object arrayObj = XposedHelpers.getStaticObjectField(cls, "c");
+            if (arrayObj != null && arrayObj.getClass().isArray()) {
+                int oldLen = Array.getLength(arrayObj);
+                Object newArray = Array.newInstance(arrayObj.getClass().getComponentType(),
+                        oldLen + newEntryCount);
+                System.arraycopy(arrayObj, 0, newArray, 0, oldLen);
+                for (int i = 0; i < newEntryCount; i++) {
+                    Array.set(newArray, oldLen + i, newEntries[i]);
+                }
+                XposedHelpers.setStaticObjectField(cls, "c", newArray);
+            }
+        } catch (Throwable ignored) {
+            // optional only
+        }
+        return true;
+    }
+
+    private static void reportCameraMakerNoteTarget(String target) {
+        log("camera_makernote=" + target);
+        try {
+            Context ctx = appContext();
+            if (ctx == null) {
+                return;
+            }
+            Bundle extras = new Bundle();
+            extras.putString("target", target);
+            ctx.getContentResolver().call(ModuleConfig.providerUri(),
+                    ModuleConfig.METHOD_SET_CAMERA_MAKERNOTE_TARGET, null, extras);
+        } catch (Throwable t) {
+            log("camera_makernote report failed: " + t);
         }
     }
 
