@@ -229,6 +229,16 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static volatile String sLastCloudEndpointOld = "";
     private static volatile boolean sCloudEndpointWarned;
 
+    /** v2.7.1: simulate CN region flag used by the cloud-config layer. */
+    private static final String[][] CN_REGION_CLASSES = new String[][]{
+            {"GLOBAL", "r21.c"},
+            {"CN", "gz0.b"}
+    };
+    private static final String CN_REGION_FIELD = "b";
+    private static volatile Class<?> sCnRegionClass;
+    private static volatile String sCnRegionLabel = "";
+    private static volatile boolean sCnRegionWarned;
+
     private static volatile Constructor<?> sLegendCtor;
     private static volatile Object sLegendV2;
     private static volatile Object sLegendM3;
@@ -286,6 +296,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookCloudResponseBodyCapture(lpparam);
             hookAiAvatarResponseEntity(lpparam);
             hookRetrofitHttpException(lpparam);
+            hookCnRegionSimulation(lpparam);
             hookCloudEndpointRedirect(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
@@ -1875,12 +1886,85 @@ public class HookEntry implements IXposedHookLoadPackage {
      * the CN endpoint. Gated by force_cn_cloud_endpoint (default true).
      * Fail-safe: never throws into the app.
      */
-    private static void hookCloudEndpointRedirect(XC_LoadPackage.LoadPackageParam lpparam) {
-        if (!forceCnCloudEndpointEnabled()) {
-            log("cloud endpoint rewrite disabled (force_cn_cloud_endpoint=off)");
-            reportCloudEndpoint("off");
+    private static void hookCnRegionSimulation(XC_LoadPackage.LoadPackageParam lpparam) {
+        if (!simulateCnRegionEnabled()) {
+            log("cn region simulation disabled (simulate_cn_region=off)");
+            reportCnRegion("off");
             return;
         }
+        for (int i = 0; i < CN_REGION_CLASSES.length; i++) {
+            String label = CN_REGION_CLASSES[i][0];
+            String className = CN_REGION_CLASSES[i][1];
+            Class<?> cls;
+            try {
+                cls = XposedHelpers.findClass(className, lpparam.classLoader);
+            } catch (Throwable t) {
+                log("cn region: " + label + " class " + className + " not present (skip)");
+                continue;
+            }
+            try {
+                XposedHelpers.setStaticBooleanField(cls, CN_REGION_FIELD, false);
+                sCnRegionClass = cls;
+                sCnRegionLabel = label;
+                dualLog("cn region simulated: " + className + "." + CN_REGION_FIELD
+                        + "=false (" + label + ")");
+                dualLog("cloud config isGlobal flag patched (" + className + ")");
+                reportCnRegion("simulated");
+                log("cn region simulation installed: " + className + "." + label);
+                return;
+            } catch (Throwable t) {
+                if (!sCnRegionWarned) {
+                    sCnRegionWarned = true;
+                    logcatWarn("cn region simulation failed (fail-safe skip)", t);
+                }
+                reportCnRegion("none");
+                return;
+            }
+        }
+        reportCnRegion("none");
+        log("WARN: no CN region flag class matched (GLOBAL r21.c / CN gz0.b absent)");
+    }
+
+    private static boolean simulateCnRegionEnabled() {
+        try {
+            return config().getBoolean("simulate_cn_region",
+                    ModuleConfig.DEFAULT_SIMULATE_CN_REGION);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    /** Re-asserts the CN region flag right before the cloud config provider computes the URL. */
+    private static void assertCnRegion() {
+        Class<?> cls = sCnRegionClass;
+        if (cls == null) {
+            return;
+        }
+        try {
+            if (simulateCnRegionEnabled()) {
+                XposedHelpers.setStaticBooleanField(cls, CN_REGION_FIELD, false);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void reportCnRegion(String value) {
+        log("cn_region=" + value);
+        try {
+            Context ctx = appContext();
+            if (ctx == null) {
+                return;
+            }
+            Bundle extras = new Bundle();
+            extras.putString("value", value);
+            ctx.getContentResolver().call(ModuleConfig.providerUri(),
+                    ModuleConfig.METHOD_SET_CN_REGION, null, extras);
+        } catch (Throwable t) {
+            logcatWarn("cn_region report failed", t);
+        }
+    }
+
+    private static void hookCloudEndpointRedirect(XC_LoadPackage.LoadPackageParam lpparam) {
         for (int i = 0; i < CLOUD_ENDPOINT_TARGETS.length; i++) {
             final String label = CLOUD_ENDPOINT_TARGETS[i][0];
             final String className = CLOUD_ENDPOINT_TARGETS[i][1];
@@ -1905,6 +1989,12 @@ public class HookEntry implements IXposedHookLoadPackage {
                     }
                     XposedBridge.hookMethod(m, new XC_MethodHook() {
                         @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            // Re-assert CN region right before the config URL is computed.
+                            assertCnRegion();
+                        }
+
+                        @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
                                 Object result = param.getResult();
@@ -1914,13 +2004,18 @@ public class HookEntry implements IXposedHookLoadPackage {
                                 String oldUrl = (String) result;
                                 String lower = oldUrl.toLowerCase(Locale.US);
                                 if (lower.contains("intl.miui.com")) {
-                                    param.setResult(CLOUD_ENDPOINT_CN);
-                                    dualLog("cloud endpoint rewritten: " + oldUrl
-                                            + " -> " + CLOUD_ENDPOINT_CN);
-                                    reportCloudEndpoint(CLOUD_ENDPOINT_CN);
-                                } else if (lower.contains("api.open.ai.xiaomi.com")) {
-                                    reportCloudEndpoint(oldUrl);
+                                    if (forceCnCloudEndpointEnabled()) {
+                                        param.setResult(CLOUD_ENDPOINT_CN);
+                                        dualLog("cloud endpoint rewritten: " + oldUrl
+                                                + " -> " + CLOUD_ENDPOINT_CN);
+                                        reportCloudEndpoint(CLOUD_ENDPOINT_CN);
+                                    } else {
+                                        dualLog("cloud endpoint observed (intl, rewrite off): "
+                                                + oldUrl);
+                                        reportCloudEndpoint(oldUrl);
+                                    }
                                 } else {
+                                    dualLog("cloud endpoint observed: " + oldUrl);
                                     reportCloudEndpoint(oldUrl);
                                 }
                             } catch (Throwable t) {
