@@ -5,8 +5,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.nezha.leica.lsposed"
-    android:versionCode="20"
-    android:versionName="2.6.2">
+    android:versionCode="21"
+    android:versionName="2.7.0">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- v2.5.0: force-launch card - read latest photo from MediaStore (runtime requested). -->
