@@ -103,6 +103,7 @@ public class CookieConfigProvider extends ContentProvider {
                 config.putString("cloud_trace", "");
                 config.putString("cloud_capture", "");
                 config.putString("cloud_endpoint", "");
+                config.putString("cn_region", "");
             }
             return config;
         }
@@ -128,6 +129,31 @@ public class CookieConfigProvider extends ContentProvider {
                 Log.i(TAG, "CookieConfigProvider: cloud trace stored (" + lines
                         + " lines, no token values)");
                 out.putBoolean("ok", true);
+            } catch (Throwable t) {
+                out.putBoolean("ok", false);
+            }
+            return out;
+        }
+
+        if (ModuleConfig.METHOD_SET_CN_REGION.equals(method)) {
+            Bundle out = new Bundle();
+            if (CAMERA_PACKAGE.equals(callerPackage)) {
+                out.putBoolean("ok", false);
+                return out;
+            }
+            String value = extras == null ? null : extras.getString("value");
+            if (value == null || value.isEmpty()) {
+                value = "none";
+            }
+            if (!"simulated".equals(value) && !"off".equals(value)) {
+                value = "none";
+            }
+            try {
+                ModuleConfig.prefs(ctx).edit()
+                        .putString(ModuleConfig.KEY_CN_REGION, value)
+                        .apply();
+                out.putBoolean("ok", true);
+                Log.i(TAG, "CookieConfigProvider: cn_region=" + value);
             } catch (Throwable t) {
                 out.putBoolean("ok", false);
             }
