@@ -246,6 +246,21 @@ public class HookEntry implements IXposedHookLoadPackage {
             {PROP_RIL_REGION, "CN"}
     };
     private static final ThreadLocal<Boolean> sSysPropRewriteGuard = new ThreadLocal<Boolean>();
+
+    /** v2.7.3: generic HTTP trace (URL/status/selected headers) + native cookie keys. */
+    private static final String HTTP_RESPONSE_CLASS = "b11.e0";
+    private static final String[] HTTP_TRACE_URL_FILTERS = new String[]{
+            "aiphotocloud", "legend", "auth/v1", "hardware", "sec.miui.com"
+    };
+    private static final String[] HTTP_TRACE_HEADER_ALLOW = new String[]{
+            "www-authenticate:", "server:", "content-type:", "content-length:",
+            "retry-after:", "x-"
+    };
+    private static final String[] HTTP_TRACE_HEADER_FORBID = new String[]{
+            "set-cookie:", "cookie:", "authorization:"
+    };
+    private static volatile boolean sHttpTraceWarned;
+    private static volatile boolean sNativeCookieLogged;
     private static final java.util.Set<String> sLoggedRegionProps = new java.util.HashSet<String>();
     private static final java.util.Set<String> sLoggedRegionRewrites = new java.util.HashSet<String>();
     private static volatile boolean sSysPropWarned;
@@ -320,6 +335,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookCnRegionSimulation(lpparam);
             hookSystemPropertiesRegion(lpparam);
             hookCloudEndpointRedirect(lpparam);
+            hookHttpResponseTrace(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
             log("FATAL hook installation error: " + t);
@@ -674,6 +690,16 @@ public class HookEntry implements IXposedHookLoadPackage {
                                 // value would fix the FIRST request only, so also
                                 // force the static cache field.
                                 forceCookieCache(target, cookie);
+                            } else {
+                                // Injection OFF/empty: log native cookie key names once
+                                // (length + keys only, never values).
+                                try {
+                                    Object nativeValue = param.getResult();
+                                    if (nativeValue instanceof String) {
+                                        logNativeCookieOnce((String) nativeValue);
+                                    }
+                                } catch (Throwable ignored) {
+                                }
                             }
                         } catch (Throwable t) {
                             log("cookie hook body error: " + t);
@@ -2220,6 +2246,205 @@ public class HookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             logcatWarn("cloud_endpoint report failed", t);
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // (1j) Generic HTTP trace + native cookie keys (v2.7.3)
+    // ---------------------------------------------------------------------
+
+    /** Logs the native (system-account) cookie length + key names once; never values. */
+    private static void logNativeCookieOnce(String nativeCookie) {
+        if (sNativeCookieLogged) {
+            return;
+        }
+        sNativeCookieLogged = true;
+        try {
+            int length = nativeCookie == null ? 0 : nativeCookie.length();
+            StringBuilder keys = new StringBuilder();
+            if (nativeCookie != null && !nativeCookie.isEmpty()) {
+                String[] parts = nativeCookie.split(";");
+                int count = 0;
+                for (int i = 0; i < parts.length && count < 40; i++) {
+                    String part = parts[i];
+                    int eq = part.indexOf('=');
+                    String key = (eq > 0 ? part.substring(0, eq) : part).trim();
+                    if (key.isEmpty()) {
+                        continue;
+                    }
+                    String existing = keys.toString();
+                    if (existing.contains(key)) {
+                        continue;
+                    }
+                    if (keys.length() > 0) {
+                        keys.append(',');
+                    }
+                    keys.append(key);
+                    count++;
+                }
+            }
+            dualLog("native cookie: length=" + length + " keys=" + keys);
+        } catch (Throwable t) {
+            logcatWarn("native cookie log failed", t);
+        }
+    }
+
+    /** Hooks the OkHttp Response constructor and traces URL/status/selected headers. */
+    private static void hookHttpResponseTrace(XC_LoadPackage.LoadPackageParam lpparam) {
+        Class<?> cls;
+        try {
+            cls = XposedHelpers.findClass(HTTP_RESPONSE_CLASS, lpparam.classLoader);
+        } catch (Throwable t) {
+            log("http_trace: response class " + HTTP_RESPONSE_CLASS + " not present (skip)");
+            return;
+        }
+        Constructor<?>[] ctors = cls.getDeclaredConstructors();
+        int hooked = 0;
+        for (int i = 0; i < ctors.length; i++) {
+            final Constructor<?> c = ctors[i];
+            Class<?>[] ps = c.getParameterTypes();
+            try {
+                if (ps.length != 13) {
+                    continue;
+                }
+                if (ps[3] != String.class || ps[4] != int.class) {
+                    continue;
+                }
+                int responseTypeCount = 0;
+                for (int p = 0; p < ps.length; p++) {
+                    if (ps[p] == cls) {
+                        responseTypeCount++;
+                    }
+                }
+                if (responseTypeCount < 3) {
+                    continue;
+                }
+                c.setAccessible(true);
+                XposedBridge.hookMethod(c, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object response = param.thisObject;
+                            if (response == null) {
+                                return;
+                            }
+                            Object request = null;
+                            try {
+                                request = XposedHelpers.getObjectField(response, "a");
+                            } catch (Throwable ignored) {
+                            }
+                            int code = 0;
+                            try {
+                                code = XposedHelpers.getIntField(response, "d");
+                            } catch (Throwable ignored) {
+                            }
+                            Object headersObj = null;
+                            try {
+                                headersObj = XposedHelpers.getObjectField(response, "e");
+                            } catch (Throwable ignored) {
+                            }
+                            String url = null;
+                            try {
+                                url = findUrlInObject(request);
+                            } catch (Throwable ignored) {
+                            }
+                            if (url == null || url.isEmpty()) {
+                                try {
+                                    url = request == null ? "" : request.toString();
+                                } catch (Throwable ignored) {
+                                    url = "";
+                                }
+                            }
+                            if (url == null || url.isEmpty()) {
+                                return;
+                            }
+                            String lowerUrl = url.toLowerCase(Locale.US);
+                            boolean matched = false;
+                            for (int f = 0; f < HTTP_TRACE_URL_FILTERS.length; f++) {
+                                if (lowerUrl.contains(HTTP_TRACE_URL_FILTERS[f])) {
+                                    matched = true;
+                                    break;
+                                }
+                            }
+                            if (!matched) {
+                                return;
+                            }
+                            String filteredHeaders = filterHttpTraceHeaders(headersObj);
+                            String line = "http_trace " + code + " " + url
+                                    + " headers={" + filteredHeaders + "}";
+                            dualLog(line);
+                            storeCloudCapture("http_trace", line);
+                        } catch (Throwable t) {
+                            if (!sHttpTraceWarned) {
+                                sHttpTraceWarned = true;
+                                logcatWarn("http_trace hook body failed (fail-safe)", t);
+                            }
+                        }
+                    }
+                });
+                hooked++;
+                log("http_trace hook installed: " + HTTP_RESPONSE_CLASS + " <init> (13 params)");
+            } catch (Throwable t) {
+                log("http_trace ctor hook failed: " + t);
+            }
+        }
+        if (hooked == 0) {
+            log("WARN: " + HTTP_RESPONSE_CLASS + " 13-param Response ctor not found");
+        }
+    }
+
+    /** Keeps only allow-listed response headers, drops cookie/auth headers, caps sizes. */
+    private static String filterHttpTraceHeaders(Object headersObj) {
+        if (headersObj == null) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder();
+        try {
+            String text = headersObj.toString();
+            if (text == null || text.isEmpty()) {
+                return "";
+            }
+            String[] lines = text.split("\\r?\\n");
+            for (int i = 0; i < lines.length; i++) {
+                String raw = lines[i].trim();
+                if (raw.isEmpty()) {
+                    continue;
+                }
+                String low = raw.toLowerCase(Locale.US);
+                boolean forbidden = false;
+                for (int f = 0; f < HTTP_TRACE_HEADER_FORBID.length; f++) {
+                    if (low.startsWith(HTTP_TRACE_HEADER_FORBID[f])) {
+                        forbidden = true;
+                        break;
+                    }
+                }
+                if (forbidden) {
+                    continue;
+                }
+                boolean allowed = false;
+                for (int a = 0; a < HTTP_TRACE_HEADER_ALLOW.length; a++) {
+                    if (low.startsWith(HTTP_TRACE_HEADER_ALLOW[a])) {
+                        allowed = true;
+                        break;
+                    }
+                }
+                if (!allowed) {
+                    continue;
+                }
+                String cleaned = sanitizeCaptureText(raw, 120);
+                if (cleaned.isEmpty()) {
+                    continue;
+                }
+                if (out.length() + cleaned.length() + 2 > 400) {
+                    break;
+                }
+                if (out.length() > 0) {
+                    out.append("; ");
+                }
+                out.append(cleaned);
+            }
+        } catch (Throwable ignored) {
+        }
+        return out.toString();
     }
 
     // ---------------------------------------------------------------------
