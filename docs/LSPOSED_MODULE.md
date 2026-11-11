@@ -1,7 +1,7 @@
-# LSPosed 模块 v2.7.3：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
+# LSPosed 模块 v2.7.5：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
 
 > 交付物：`out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.1.0.apk`（源：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.1.0.apk`；legacy Xposed 模块，LSPosed 可用）
-> 版本：`versionCode 24 / versionName 2.7.3`，74,340 B，sha256 `bf096cf0350b10c6f06fa62ec714a7df8ce9dd80adb61c1cd025854885d96f9c`（两次构建字节一致）
+> 版本：`versionCode 26 / versionName 2.7.5`，78,436 B，sha256 `3eebe9ad9cff0110288bf17a829002d994443617ace2782950e66e4d04d454c1`（两次构建字节一致）
 > 目标：小米 17 Ultra（`nezha` / `nezha_global`），HyperOS 4 / Android 17；`com.miui.mediaeditor`（相册-编辑）、可选 `com.android.camera`（配 Magisk CameraOnly）、`com.miui.gallery`（占位）
 >
 > **v2.7.3 新增（HTTP 全链路追踪 + 原生 Cookie 键名）**：v2.7.2 区域模拟后云配置下发 CN 侧域名 `https://avatar-ai.sec.miui.com`，legendV2 返回 **401**（关闭 Cookie 注入、系统小米账号已登录仍 401）。v2.7.3 新增：
@@ -12,7 +12,38 @@
 
 > **v2.7.1 新增（模拟 CN 区域获取真实 CN 云基址）**：v2.7.0 硬编码 `api.open.ai.xiaomi.com` 的 legendV2 路径 404，说明 CN AI 照片云基址由 **CN 区域云配置**下发。核查 smali：GLOBAL 云配置工具 `jq.d.a` 读取 `r21.c.b`（isGlobal），CN 对应 `nm.c.a` 读取 `gz0.b.b`。v2.7.1 在 mediaeditor 进程把该静态布尔置为 `false`（并在 `jq.d.a`/`nm.c.a` beforeHook 中反复置位），使云配置按 CN 区域下发真正的 CN 基址；开关 `simulate_cn_region`（默认开），诊断新增 `cn_region=simulated|off|none`；`force_cn_cloud_endpoint` 改为默认关（硬编码 URL 404 的 A/B 对照保留）。可用 logcat 的 `cloudConfigProductUrl:` 验证是否变成 CN 域名。
 
-### 最终结论（真机实测，v2.7.0）
+### 最终结论（真机实测，v2.7.5）
+
+**已打通（真实设备验证）**
+1. **云端鉴权打通**：`simulate_cn_region=true` + 手动 Cookie（含 `hyperos_sec_common` 安全 token）+ 运行时区域属性 hook → 云配置下发 CN 侧域名 `https://avatar-ai.sec.miui.com`，`uploadFile`、`createLegendTask success, isV2=true` 均成功（不再 401/439/20090002）。
+2. **相机 MakerNote 标签表 hook 生效**：v2.7.4 修复后日志为 `Bf.g rejected` → `target=Ig.g mapD=10 mapE=10 entries added=5 momentKeysPresent=5/5` → `camera_makernote=GLOBAL`。
+3. 实测 12:44 之后 create 全部到达 CN 网关并被受理。
+
+**仍失败的原因（服务端图片校验）**
+- create 后任务轮询返回：`legend task error status=failed, errCode=21, errorMsg=该图片暂不支持`。
+- 失败根因在**照片本身缺少一瞬元数据**，证据链：
+  - 相机日志：`ExifInterface: getAttribute from XiaomiIdentifier: legendmode null`；
+  - 新拍照片的 Xiaomi MakerNote 只有 6 个 HdrDisplay 标签（id 1,2,3,4,5,0x10），**没有 Moment 标签 0x30~0x34**（即使 MakerNote 标签表已扩展）；
+  - 照片 XMP 中无 `meta/protobuf`（mediaeditor 日志：`JpegDataCleaner - injectBrightnessToXmp: meta/protobuf not found in XMP`），也无 legend protobuf；
+  - mediaeditor `parseMakerNote` 对 Global 相机新照片始终 `version=null, momentType=null, ...`。
+- 结论：**Global 相机 6.6 的拍摄链路不产生一瞬（legend/M9）元数据**（HAL 侧 `legendmode` 就是 null），相机侧 hook 只能保留标签、无法生成数据；服务端因此判定"该图片暂不支持"。
+- CN 相机 CameraOnly（CN 6.7 替换 APK）在 Global ROM 上**无法启动/导致系统起不来**（已实测并回滚），因此不能靠换相机 APK 解决。
+
+**可用配置（真机验证，能过鉴权并提交 create）**
+- `simulate_cn_region = true`（默认开）
+- `force_cn_cloud_endpoint = false`（默认关；硬编码 404 已废弃）
+- `enable_cookie = true` + `cookie_mode = manual`（Cookie 需含 `hyperos_sec_common` 安全 token，可通过网页登录抓取）
+- `force_legend_fallback = false`
+- `force_legend_cloud_params`：开/关均可（服务端都受理 create；图片缺元数据仍失败）
+- `sync_cn_camera_makernote = true`（保留 HAL 可能写入的 Moment 标签，有备无患）
+- `trace_capture_params = true`（诊断用，可关）
+
+**要真正出图，只有两条路**
+1. **刷完整 CN ROM**（`ro.miui.build.region=cn` 等环境 + CN 系统组件），让相机/媒体编辑器原生产生并识别一瞬数据；
+2. 等小米国际版后台/相机支持该能力（国际版曾缺 `ai_billing_record` 表，现已换 CN 网关但仍校验图片）。
+
+### 历史结论（真机实测，v2.7.0）
+
 
 1. **客户端全链路已打通**：门禁解锁、Cookie 注入、上传、create 请求（含参数）、MakerNote 回落、响应捕获均正常。
 2. **国际版端点服务端故障**：`sgp-ai-photo.engine.intl.miui.com` 的 create 返回 `code=20090002`，响应 body 明确为
