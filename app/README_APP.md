@@ -10,9 +10,9 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.7.1.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 22 / versionName 2.7.1，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.7.0）已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.7.2.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 23 / versionName 2.7.2，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.7.1）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
    v2.4.0 重点：**彻底移除系统账号 Cookie 路径**（不读取/不捕获/不保存系统账号 STS Cookie）；
    Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）。
@@ -66,6 +66,13 @@
    在 `jq.d.a`/`nm.c.a` before hook 中再次断言。`force_cn_cloud_endpoint` 默认改为 **false**
    （仅在仍返回 intl 且手动开启时才重写）。诊断新增 `cn_region=simulated|off|none`；
    logcat 验证看 App 自己的 `cloudConfigProductUrl:` 是否变成 CN 主机。
+   v2.7.2 新增 **区域属性模拟（默认开启，仅运行时 hook、不修改任何系统属性）**：真机日志显示 v2.7.1
+   翻转 `r21.c.b` 后云端仍是 intl，说明云配置 URL 还取决于 region/country 输入。本版在 mediaeditor 进程内
+   hook `android.os.SystemProperties.get(String[,String])`：对名字含 region/country/locale 的读取打印
+   `region prop: <name>=<value>`，并在 `simulate_cn_region` 开启时把 region/country 属性重写为 CN 值
+   （`ro.miui.build.region`→`cn`，`ro.miui.region`/`ro.product.locale.region`/`ro.vendor.miui.region`/
+   `ro.vendor.radio.build_region`/`ro.ril.region` 及任意 `*region*`/`*country*`→`CN`），并再次断言
+   `r21.c.b=false`。验证前建议执行一次 `su -c "pm clear com.miui.mediaeditor"` 强制重新拉取云配置。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -299,6 +306,15 @@ HyperOS 4 引入了大量 Rust 组件：
     （路径仅匹配 aiPhotoCloud / legend / hardwareAuth / hardwareNonce / auth/v1 / billing），
     **绝不记录查询参数、签名、Cookie 值、请求头值或请求体**。使用方式：先打开相册编辑并触发一次
     「二次增强」，再刷新轨迹/复制诊断，即可在真机看到 App 实际请求的云地址与 HTTP 码。
+- **区域属性模拟（v2.7.2，默认开启，仅运行时 hook）**：在 mediaeditor 进程中 hook
+  `android.os.SystemProperties.get(String[,String])`，把区域/国家属性按 CN 重写
+  （`ro.miui.build.region`→`cn`，`ro.miui.region`/`ro.product.locale.region`/`ro.vendor.miui.region`/
+  `ro.vendor.radio.build_region`/`ro.ril.region`/任意含 region 或 country 的属性→`CN`），同时打印
+  `region prop: <name>=<value>`。**只影响 hook 进程内的读取，不写入任何系统属性**。
+  测试前建议先执行一次：`su -c "pm clear com.miui.mediaeditor"`（清除云配置缓存，强制重新拉取），
+  然后强制停止 mediaeditor 并重新触发二次增强；预期 logcat 中 App 自己的 `cloudConfigProductUrl:`
+  变成 CN 主机（不含 `intl.miui.com`）。若仍为 intl，把 `region prop` 与 `cloudConfigProductUrl:`
+  相关 logcat 发回分析（可看到具体是哪个属性被读取）。
 - **模拟 CN 区域（v2.7.1，默认开启）+ CN 端点重定向（v2.7.0，A/B）**：④ 功能开关中
   「模拟 CN 区域（让云配置返回 CN 基址）」默认开启——模块把云配置层读取的区域标志
   （GLOBAL `r21.c.b` / CN `gz0.b.b`）置为 `false`，并在云端基址方法调用前再次断言，使云配置服务
@@ -405,6 +421,7 @@ HyperOS 4 引入了大量 Rust 组件：
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
 | 拍摄的一瞬照片没有 Moment 元数据（媒体编辑器仍报 legendInfo null / 图片解析失败） | v2.6.0 默认启用 CN/Global 相机 MakerNote 标签同步；请确认 ④ 开关 `sync_cn_camera_makernote` 开启、诊断显示 `camera_makernote=GLOBAL`（或 CN），并**强制停止相机/重启**使相机进程重新加载模块；再用相机拍一张正常亮度、未编辑的徕卡一瞬照片测试。 |
+| 区域模拟后 cloudConfigProductUrl 仍是 intl | v2.7.2 起会打印 `region prop: <name>=<value>`（最多20个不同名字）并按 CN 重写 region/country 属性；请先 `su -c "pm clear com.miui.mediaeditor"` 清配置缓存、强制停止 mediaeditor 后重试，并把含 `region prop` / `cloudConfigProductUrl:` / `cn_region=` / `cloud_endpoint=` 的 logcat 发回。 |
 | 云配置是否真的返回了 CN 基址 | v2.7.1 默认「模拟 CN 区域」开启；logcat 搜索 App 自己的 `cloudConfigProductUrl:`，应为 CN 主机（不含 `intl.miui.com`）；模块同时打印 `cn region simulated: <class>.b=false`、`cloud_endpoint=…`，诊断显示 `cn_region=simulated`。若仍为 intl：确认 ④ 两个开关状态、强制停止 mediaeditor 后重试，并把 logcat 发回。 |
 | 想确认云请求到底发往哪个端点 | v2.7.0 起在 ④/「复制诊断信息」查看 `cloud_endpoint=`；logcat 看 `cloud endpoint rewrite target class=…` 与 `cloud endpoint rewritten: <旧> -> https://api.open.ai.xiaomi.com`。开启 `force_cn_cloud_endpoint`（默认）= CN 端点，关闭 = 国际端点（A/B 对照）。 |
 | 云端 create 返回 HTTP 400 / errorCode 20090002 | v2.6.2 起每个捕获点都会同时写 logcat：`su -c "logcat -d | grep -E 'LeicaMoment|LSPosed-Bridge' | tail -60"`，重点看 `legend_create_body=`（实际发送 JSON）、`cloud_resp_body=`、`resp_entity code=... msg=...`、`http_error code=... msg=...`。UI 的「云端报文捕获（最近8条）」/「复制诊断信息」也显示脱敏后的内容；若 UI 为空而 logcat 有内容，说明 provider 写入被拦（不影响抓报文）。常见原因：oaid 伪值不被接受、focus/aperture 取值范围或 imgUrl 参数不匹配。 |
