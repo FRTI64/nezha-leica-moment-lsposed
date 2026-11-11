@@ -10,9 +10,9 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.5.0.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 14 / versionName 2.5.0，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.4.3）已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.5.1.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 15 / versionName 2.5.1，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.5.0）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
    v2.4.0 重点：**彻底移除系统账号 Cookie 路径**（不读取/不捕获/不保存系统账号 STS Cookie）；
    Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）。
@@ -27,6 +27,9 @@
    v2.5.0 新增 **②.5 强制启动二次增强（排障）**：相册入口不显示时，可直接选择照片/使用相册最新照片，
    显式启动 `com.miui.mediaeditor/com.miui.mediaeditor.legendary.LegendaryActivity`（带
    READ Uri 授权；失败自动尝试备用组件名），或复制 adb 启动命令手动执行。
+   v2.5.1 新增 **legend 版本回落注入（option B，默认开启）**：hook mediaeditor 的 LegendaryVersionResolver
+   工厂 `lv.j0.a/b`，使无一瞬 maker note 的照片也能走 cleaned upload 兜底、越过「图片解析失败」到达云端请求
+   （结果被替换为 V2/M3/TRUE/f 组合）。可在 ④ 功能开关 关闭 (`force_legend_fallback`)。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -204,6 +207,11 @@ HyperOS 4 引入了大量 Rust 组件：
   - 「复制 adb 启动命令」→ 复制 `am start -n <component> -d <uri> --grant-read-uri-permission` 供手动排障；
   - 状态区显示启动的组件、Uri scheme（`content://…`）与提醒：进入页面点「开始处理」后，回模块点
     「刷新云端轨迹」查看 App 实际请求的云地址与 HTTP 码。
+  - **legend 版本回落（v2.5.1，默认开启）**：模块会 hook mediaeditor 的 LegendaryVersionResolver 工厂
+    （`lv.j0.a` / `lv.j0.b`），把解析结果替换为 `lv.d0(V2, M3, Boolean.TRUE, legendary.e.f)`，
+    使**没有一瞬 maker note 元数据**的照片也能走 cleaned upload 兜底路径，越过「图片解析失败」并尝试发出
+    云端请求。风险：可能产生一次云请求/消耗云端额度，服务端可能拒绝（鉴权/权益/设备白名单）；
+    可在「④ 功能开关」中关闭 `force_legend_fallback`。
   - 说明：该卡片只调用 App 自己导出的 Activity，不修改任何系统属性；照片仅临时授权给
     com.miui.mediaeditor 读取。
 - **③ Cookie 体检（只读探测）**：点「检测 Cookie 有效性」后，后台线程执行
@@ -318,6 +326,7 @@ HyperOS 4 引入了大量 Rust 组件：
 |---|---|
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
+| 「图片解析失败」（legendInfo is null） | v2.5.1 默认启用 legend 版本回落注入后，无一瞬 maker note 的照片会走 cleaned upload 兜底并尝试云端请求；若仍失败请确认 ④ 功能开关中 `force_legend_fallback` 为开启，并查看「刷新云端轨迹」中的请求与 HTTP 码。 |
 | 相册没有「二次增强」入口 | 用「②.5 强制启动二次增强（排障）」：先拍一张正常亮度、未编辑的徕卡一瞬照片，再「选择照片并启动」或「用相册最新照片启动」；进入页面点「开始处理」后回模块刷新云端轨迹。 |
 | 想确认 App 真实请求的云地址/HTTP 码 | 打开相册编辑触发一次「二次增强」→ 回模块 →「刷新云端轨迹」或「复制诊断信息」。轨迹只含 method/host/path/HTTP 码/是否带 Cookie，不含令牌/查询/请求体。 |
 | 体检 micloud 返回 HTTP 200（绿色「鉴权通过」） | Cookie 已被小米云鉴权接受；请直接实测相册编辑「二次增强」。能否出图仍取决于服务端权益/设备白名单/硬件认证 token（客户端无法验证）。AI 云平台参考行若为 404 属正常（基址由云端动态下发），不影响鉴权结论。 |
