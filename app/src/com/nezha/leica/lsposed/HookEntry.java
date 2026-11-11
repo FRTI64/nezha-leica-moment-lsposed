@@ -220,6 +220,15 @@ public class HookEntry implements IXposedHookLoadPackage {
             "com.miui.mediaeditor.aigc.cloud.internal.aiavatarv2.api.entity.AiAvatarV2ResponseEntity";
     private static final String RETROFIT_HTTP_EXCEPTION_CLASS = "l21.j";
 
+    /** v2.7.0: redirect AI cloud base URL to CN endpoint (intl backend billing is broken). */
+    private static final String CLOUD_ENDPOINT_CN = "https://api.open.ai.xiaomi.com";
+    private static final String[][] CLOUD_ENDPOINT_TARGETS = new String[][]{
+            {"GLOBAL", "jq.d"},
+            {"CN", "nm.c"}
+    };
+    private static volatile String sLastCloudEndpointOld = "";
+    private static volatile boolean sCloudEndpointWarned;
+
     private static volatile Constructor<?> sLegendCtor;
     private static volatile Object sLegendV2;
     private static volatile Object sLegendM3;
@@ -277,6 +286,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookCloudResponseBodyCapture(lpparam);
             hookAiAvatarResponseEntity(lpparam);
             hookRetrofitHttpException(lpparam);
+            hookCloudEndpointRedirect(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
             log("FATAL hook installation error: " + t);
@@ -1852,6 +1862,113 @@ public class HookEntry implements IXposedHookLoadPackage {
             best = best.substring(0, maxChars) + "\u2026";
         }
         return best;
+    }
+
+    // ---------------------------------------------------------------------
+    // (1i) Cloud endpoint redirect (v2.7.0: intl -> CN api.open.ai.xiaomi.com)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Global AI cloud base URL comes from jq.d.a(...) (CN equivalent nm.c.a),
+     * logged as cloudConfigProductUrl. The intl backend is broken for legendV2
+     * create (missing ai_billing_record table), so rewrite the returned URL to
+     * the CN endpoint. Gated by force_cn_cloud_endpoint (default true).
+     * Fail-safe: never throws into the app.
+     */
+    private static void hookCloudEndpointRedirect(XC_LoadPackage.LoadPackageParam lpparam) {
+        if (!forceCnCloudEndpointEnabled()) {
+            log("cloud endpoint rewrite disabled (force_cn_cloud_endpoint=off)");
+            reportCloudEndpoint("off");
+            return;
+        }
+        for (int i = 0; i < CLOUD_ENDPOINT_TARGETS.length; i++) {
+            final String label = CLOUD_ENDPOINT_TARGETS[i][0];
+            final String className = CLOUD_ENDPOINT_TARGETS[i][1];
+            Class<?> cls;
+            try {
+                cls = XposedHelpers.findClass(className, lpparam.classLoader);
+            } catch (Throwable t) {
+                log("cloud endpoint: " + label + " class " + className + " not present (skip)");
+                continue;
+            }
+            int hooked = 0;
+            Method[] methods = cls.getDeclaredMethods();
+            for (int j = 0; j < methods.length; j++) {
+                final Method m = methods[j];
+                try {
+                    if (!m.getName().equals("a") || m.getReturnType() != String.class) {
+                        continue;
+                    }
+                    int pc = m.getParameterTypes().length;
+                    if (pc != 3 && pc != 4) {
+                        continue;
+                    }
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                Object result = param.getResult();
+                                if (!(result instanceof String)) {
+                                    return;
+                                }
+                                String oldUrl = (String) result;
+                                String lower = oldUrl.toLowerCase(Locale.US);
+                                if (lower.contains("intl.miui.com")) {
+                                    param.setResult(CLOUD_ENDPOINT_CN);
+                                    dualLog("cloud endpoint rewritten: " + oldUrl
+                                            + " -> " + CLOUD_ENDPOINT_CN);
+                                    reportCloudEndpoint(CLOUD_ENDPOINT_CN);
+                                } else if (lower.contains("api.open.ai.xiaomi.com")) {
+                                    reportCloudEndpoint(oldUrl);
+                                } else {
+                                    reportCloudEndpoint(oldUrl);
+                                }
+                            } catch (Throwable t) {
+                                if (!sCloudEndpointWarned) {
+                                    sCloudEndpointWarned = true;
+                                    logcatWarn("cloud endpoint rewrite failed (fail-safe)", t);
+                                }
+                            }
+                        }
+                    });
+                    hooked++;
+                    log("cloud endpoint rewrite target class=" + className + ".a (" + label + ")");
+                } catch (Throwable t) {
+                    log("cloud endpoint hook failed: " + m.getName() + " -> " + t);
+                }
+            }
+            if (hooked > 0) {
+                log("cloud endpoint redirect installed via " + className + " (" + label + ")");
+                return;
+            }
+        }
+        reportCloudEndpoint("none");
+        log("WARN: no cloud endpoint provider matched (GLOBAL jq.d / CN nm.c absent)");
+    }
+
+    private static boolean forceCnCloudEndpointEnabled() {
+        try {
+            return config().getBoolean("force_cn_cloud_endpoint",
+                    ModuleConfig.DEFAULT_FORCE_CN_CLOUD_ENDPOINT);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private static void reportCloudEndpoint(String value) {
+        log("cloud_endpoint=" + value);
+        try {
+            Context ctx = appContext();
+            if (ctx == null) {
+                return;
+            }
+            Bundle extras = new Bundle();
+            extras.putString("url", value);
+            ctx.getContentResolver().call(ModuleConfig.providerUri(),
+                    ModuleConfig.METHOD_SET_CLOUD_ENDPOINT, null, extras);
+        } catch (Throwable t) {
+            logcatWarn("cloud_endpoint report failed", t);
+        }
     }
 
     // ---------------------------------------------------------------------
