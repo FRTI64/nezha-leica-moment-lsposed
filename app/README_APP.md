@@ -10,9 +10,9 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.7.3.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 24 / versionName 2.7.3，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.7.2）已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.7.5.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 26 / versionName 2.7.5，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.7.4）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
    v2.4.0 重点：**彻底移除系统账号 Cookie 路径**（不读取/不捕获/不保存系统账号 STS Cookie）；
    Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）。
@@ -73,6 +73,21 @@
    （`ro.miui.build.region`→`cn`，`ro.miui.region`/`ro.product.locale.region`/`ro.vendor.miui.region`/
    `ro.vendor.radio.build_region`/`ro.ril.region` 及任意 `*region*`/`*country*`→`CN`），并再次断言
    `r21.c.b=false`。验证前建议执行一次 `su -c "pm clear com.miui.mediaeditor"` 强制重新拉取云配置。
+   v2.7.5 新增 **相机采集参数轨迹（诊断，默认开启）**：hook 相机进程的
+   `android.hardware.camera2.CaptureRequest$Builder.set(Key,Object)`，只记录 key 名含
+   `legend` 或 `sessionparams` 的供应商参数（每个名字一次，最多 40 个），打印
+   `capture_param <name>=<value>`（byte[] 以 hex+长度表示，其它值截断 120 字符），
+   legend 相关额外打印 `capture_param legendMode candidate: …`。用于确认 GLOBAL 相机是否
+   真正设置了 `com.xiaomi.sessionparams.legendMode`（v2.7.4 钩子生效后拍摄的 JPEG MakerNote
+   仍只有 6 个 HdrDisplay 标签、无 Moment 标签；mediaeditor 服务端返回 errCode 21「该图片暂不支持」）。
+   只读不改值；grep：`su -c "logcat -d | grep -E 'capture_param|legendMode'"`。
+   v2.7.4 修复 **相机 MakerNote 标签注入选错类**：GLOBAL 相机 6.6 上存在无关的 `Bf.g`（无静态 map d/e），
+   v2.6.0 安装器在第一个候选失败后直接放弃、**从未扩展真正的 `Ig.g` map**（设备日志
+   `camera makernote: Bf.g has no static map d/e fields`、`camera_makernote=CN`）。本版对每个候选先校验
+   静态 HashMap `d`/`e` 存在且非空，无效则记 `camera makernote: <class> rejected (<reason>)` 并**继续**下一个
+   候选；成功后打印 `camera makernote target=<class> mapD=<size> mapE=<size> entries added=<n>`、
+   校验 0x30..0x34 全部存在，且仅成功时上报 `camera_makernote=GLOBAL|CN`（否则 none）。
+   **改完必须强制停止相机/重启**后再拍一瞬照片测试。
    v2.7.3 新增 **通用 HTTP 轨迹 + 原生 Cookie 键名**：hook 混淆 OkHttp Response `b11.e0` 的 13 参构造器，
    对 URL 含 aiPhotoCloud/legend/auth/v1/hardware/sec.miui.com 的响应打印并保存
    `http_trace <code> <url> headers={…}`（仅保留 `www-authenticate`/`x-*`/`server`/`content-type`/
@@ -254,7 +269,7 @@ HyperOS 4 引入了大量 Rust 组件：
   - 「用相册最新照片启动」→ 运行时请求 `READ_MEDIA_IMAGES`（Android 13+；旧版本回退
     `READ_EXTERNAL_STORAGE`）→ MediaStore 查询最新照片（`_id`/`DISPLAY_NAME`）→ 同样方式启动；
   - 「复制 adb 启动命令」→ 复制 `am start -n <component> -d <uri> --grant-read-uri-permission` 供手动排障；
-  - **CN/Global 相机 MakerNote 标签同步（v2.6.0，默认开启）**：相机进程启动时扩展 Xiaomi MakerNote
+  - **CN/Global 相机 MakerNote 标签同步（v2.6.0，v2.7.4 修复候选类选择，默认开启）**：相机进程启动时扩展 Xiaomi MakerNote
     tag map（CN `Bf.g`，GLOBAL `Ig.g`），补注册 CN 相机 6.7 独有的 5 个 Moment 标签
     （MomentVersion/MomentType/MomentSubMode/MomentPro/MomentBokehDepthVersion，0x30..0x34, type 4）。
     这样 GLOBAL 相机 6.6 的 ExifToolBuild 在保存照片时会保留 HAL 写入的 Moment 标签，
@@ -342,6 +357,12 @@ HyperOS 4 引入了大量 Rust 组件：
   查看完整请求序列（hardwareNonce/hardwareAuthToken/upload/create）的 `http_trace <code> <url> headers={…}`，
   以及 `native cookie: length=… keys=…` 是否包含 sec/security 类键。注意：headers 只含白名单字段，
   绝不含 cookie/authorization 值。
+- **相机采集参数轨迹（v2.7.5）**：拍摄一张徕卡一瞬照片后执行
+  `su -c "logcat -d | grep -E 'capture_param|legendMode'"`：
+  - 若出现 `capture_param legendMode candidate: com.xiaomi.sessionparams.legendMode=…`，说明相机确实设置了该供应商参数，可进一步看值是否被 HAL/Exif 丢弃；
+  - 若**完全没有** legendMode 行，说明 GLOBAL 相机 6.6 根本没有设置该采集参数（或走了非 Java 路径），
+    这解释了 MakerNote 中无 Moment 标签、媒体编辑器解析 legendInfo=null、服务端 errCode 21；
+  - 需在拍摄前 force-stop 相机使模块加载。
 - **日志排障（v2.6.2）**：若「云端报文捕获/云端轨迹」仍显示暂无，用 adb 抓 logcat：
   `su -c "logcat -d | grep -E 'LeicaMoment|LSPosed-Bridge' | tail -60"`
   重点看 `create_params final:` / `legend_create_body=` / `cloud_resp_body=` / `resp_entity code=` /
@@ -431,7 +452,8 @@ HyperOS 4 引入了大量 Rust 组件：
 |---|---|
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
-| 拍摄的一瞬照片没有 Moment 元数据（媒体编辑器仍报 legendInfo null / 图片解析失败） | v2.6.0 默认启用 CN/Global 相机 MakerNote 标签同步；请确认 ④ 开关 `sync_cn_camera_makernote` 开启、诊断显示 `camera_makernote=GLOBAL`（或 CN），并**强制停止相机/重启**使相机进程重新加载模块；再用相机拍一张正常亮度、未编辑的徕卡一瞬照片测试。 |
+| 拍摄的一瞬照片没有 Moment 元数据 / 服务端 errCode 21「该图片暂不支持」 | 先确认 v2.7.4 相机钩子生效（logcat：`camera makernote: Bf.g rejected` → `camera makernote target=Ig.g … entries added=5` → `camera_makernote=GLOBAL`），再拍一张新的徕卡一瞬照片，然后执行 `su -c "logcat -d | grep -E 'capture_param|legendMode'"`：若无 legendMode 行，则 GLOBAL 相机未设置 `com.xiaomi.sessionparams.legendMode`（客户端 hook 只能记录，不能凭空生成相机侧元数据）；请把 capture_param 相关 logcat 发回。 |
+| 拍摄的一瞬照片没有 Moment 元数据（媒体编辑器仍报 legendInfo null / 图片解析失败） | v2.7.4 修复了 GLOBAL 相机误选无关 `Bf.g` 导致注入从未生效的问题：logcat 应看到 `camera makernote: Bf.g rejected (...)` 后 `camera makernote target=Ig.g mapD=… mapE=… entries added=5`、`camera makernote map extended: +5 Moment tags (GLOBAL=Ig.g)`、`camera_makernote=GLOBAL`；改完请**强制停止相机/重启**再拍。v2.6.0 默认启用 CN/Global 相机 MakerNote 标签同步；请确认 ④ 开关 `sync_cn_camera_makernote` 开启、诊断显示 `camera_makernote=GLOBAL`（或 CN），并**强制停止相机/重启**使相机进程重新加载模块；再用相机拍一张正常亮度、未编辑的徕卡一瞬照片测试。 |
 | 区域模拟成功但 legendV2 仍 401 | v2.7.3 会打印 `http_trace`（URL/状态码/白名单响应头）与 `native cookie`（长度+键名）。请关闭 Cookie 注入（④ 功能开关）后重试，收集 `su -c "logcat -d | grep -E 'http_trace|native cookie' | tail -100"` 发回：重点看 401 的 `www-authenticate`/`x-*` 头、系统账号 Cookie 是否含 sec/security token，以及 hardwareNonce/hardwareAuthToken 调用是否成功。 |
 | 区域模拟后 cloudConfigProductUrl 仍是 intl | v2.7.2 起会打印 `region prop: <name>=<value>`（最多20个不同名字）并按 CN 重写 region/country 属性；请先 `su -c "pm clear com.miui.mediaeditor"` 清配置缓存、强制停止 mediaeditor 后重试，并把含 `region prop` / `cloudConfigProductUrl:` / `cn_region=` / `cloud_endpoint=` 的 logcat 发回。 |
 | 云配置是否真的返回了 CN 基址 | v2.7.1 默认「模拟 CN 区域」开启；logcat 搜索 App 自己的 `cloudConfigProductUrl:`，应为 CN 主机（不含 `intl.miui.com`）；模块同时打印 `cn region simulated: <class>.b=false`、`cloud_endpoint=…`，诊断显示 `cn_region=simulated`。若仍为 intl：确认 ④ 两个开关状态、强制停止 mediaeditor 后重试，并把 logcat 发回。 |
