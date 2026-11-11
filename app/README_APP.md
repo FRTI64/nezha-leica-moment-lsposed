@@ -10,9 +10,9 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.5.3.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 17 / versionName 2.5.3，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.5.2）已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.6.0.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 18 / versionName 2.6.0，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.5.3）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
    v2.4.0 重点：**彻底移除系统账号 Cookie 路径**（不读取/不捕获/不保存系统账号 STS Cookie）；
    Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）。
@@ -38,6 +38,11 @@
    (errorCode 439) 拒绝；本版 hook `CreateLegendV2TaskParams` 构造函数补全这些参数
    （aperture=1.67、focusX=2048、focusY=1536、oaid=每进程稳定伪 UUID），并让云端轨迹为
    aiPhotoCloud/legend 请求追加**响应 body 片段**（`peekBody` 非消费式、已脱敏、≤200 字符）。
+   v2.6.0 新增 **CN/Global 相机 MakerNote 标签同步（hook 版，不替换 APK）**：GLOBAL MiuiCamera 6.6 的
+   MakerNote tag map 只注册 5 个 HdrDisplay 标签，缺少 CN 相机 6.7 的 5 个 Moment* 标签
+   （0x30..0x34, type 4）；模块在相机进程内扩展该 map（CN `Bf.g` / GLOBAL `Ig.g` 的静态 d/e map），
+   使 HAL 写入的 Moment 标签在 ExifToolBuild 重新序列化时**不再被丢弃**。
+   需强制停止相机或重启；④ 功能开关可关闭（`sync_cn_camera_makernote`），诊断显示 `camera_makernote=CN|GLOBAL|none`。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -213,6 +218,14 @@ HyperOS 4 引入了大量 Rust 组件：
   - 「用相册最新照片启动」→ 运行时请求 `READ_MEDIA_IMAGES`（Android 13+；旧版本回退
     `READ_EXTERNAL_STORAGE`）→ MediaStore 查询最新照片（`_id`/`DISPLAY_NAME`）→ 同样方式启动；
   - 「复制 adb 启动命令」→ 复制 `am start -n <component> -d <uri> --grant-read-uri-permission` 供手动排障；
+  - **CN/Global 相机 MakerNote 标签同步（v2.6.0，默认开启）**：相机进程启动时扩展 Xiaomi MakerNote
+    tag map（CN `Bf.g`，GLOBAL `Ig.g`），补注册 CN 相机 6.7 独有的 5 个 Moment 标签
+    （MomentVersion/MomentType/MomentSubMode/MomentPro/MomentBokehDepthVersion，0x30..0x34, type 4）。
+    这样 GLOBAL 相机 6.6 的 ExifToolBuild 在保存照片时会保留 HAL 写入的 Moment 标签，
+    媒体编辑器 parseMakerNote 才能解析到一瞬元数据（二次增强的前置条件之一）。
+    **需强制停止相机或重启手机**后生效；④ 功能开关可关闭，诊断显示 `camera_makernote=CN|GLOBAL|none`。
+    测试：拍一张正常亮度、未编辑的「徕卡一瞬」照片，再用强制启动/相册编辑触发二次增强，查看是否仍报
+    legendInfo/元数据缺失。
   - **legend 云端参数补全（v2.5.3，默认开启）**：hook `CreateLegendV2TaskParams` 构造函数，在
     `aperture/focusX/focusY/oaid` 为空时补 1.67 / 2048 / 1536 / 伪 UUID，避免 create 请求 400；
     云端轨迹（aiPhotoCloud/legend）会追加非消费式 `peekBody(1024)` 得到的**脱敏响应 body 片段**（≤200 字符），
@@ -342,6 +355,7 @@ HyperOS 4 引入了大量 Rust 组件：
 |---|---|
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
+| 拍摄的一瞬照片没有 Moment 元数据（媒体编辑器仍报 legendInfo null / 图片解析失败） | v2.6.0 默认启用 CN/Global 相机 MakerNote 标签同步；请确认 ④ 开关 `sync_cn_camera_makernote` 开启、诊断显示 `camera_makernote=GLOBAL`（或 CN），并**强制停止相机/重启**使相机进程重新加载模块；再用相机拍一张正常亮度、未编辑的徕卡一瞬照片测试。 |
 | 云端 create 返回 HTTP 400 / errorCode 439 | v2.5.3 已默认补全 CreateLegendV2TaskParams 的 aperture/focusX/focusY/oaid，请确认 ④ 功能开关 `force_legend_cloud_params` 开启，并在「刷新云端轨迹」/复制诊断中查看追加的 `body=` 片段；若仍 400，把该片段发回分析（含 errorCode/errorMsg，无令牌/请求头值）。 |
 | 「图片解析失败」（legendInfo is null） | v2.5.2 起 CN/GLOBAL 均支持 legend 版本回落注入（`legend_fallback_target` 显示命中变体，none 表示未匹配）；若仍失败请确认 ④ 功能开关中 `force_legend_fallback` 为开启，并查看「刷新云端轨迹」中的请求与 HTTP 码。原 v2.5.1 说明：，无一瞬 maker note 的照片会走 cleaned upload 兜底并尝试云端请求；若仍失败请确认 ④ 功能开关中 `force_legend_fallback` 为开启，并查看「刷新云端轨迹」中的请求与 HTTP 码。 |
 | 相册没有「二次增强」入口 | 用「②.5 强制启动二次增强（排障）」：先拍一张正常亮度、未编辑的徕卡一瞬照片，再「选择照片并启动」或「用相册最新照片启动」；进入页面点「开始处理」后回模块刷新云端轨迹。 |
