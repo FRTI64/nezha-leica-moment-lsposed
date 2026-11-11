@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "2.6.2";
+    public static final String MODULE_VERSION = "2.7.0";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
@@ -33,6 +33,8 @@ public final class ModuleConfig {
     public static final String METHOD_SET_CAMERA_MAKERNOTE_TARGET = "set_camera_makernote_target";
     /** v2.6.1: capture create-request JSON + server response body (local only, last 8). */
     public static final String METHOD_APPEND_CLOUD_CAPTURE = "append_cloud_capture";
+    /** mediaeditor process reports the effective cloud base URL after rewrite. */
+    public static final String METHOD_SET_CLOUD_ENDPOINT = "set_cloud_endpoint";
 
     public static final String KEY_COOKIE = "cookie";
     public static final String KEY_ENABLE_GATE_BYPASS = "enable_gate_bypass";
@@ -56,6 +58,10 @@ public final class ModuleConfig {
     public static final String KEY_CAMERA_MAKERNOTE_TARGET = "camera_makernote";
     /** Newline-joined last 8 captured cloud payloads (request/response JSON, local only). */
     public static final String KEY_CLOUD_CAPTURE = "cloud_capture";
+    /** v2.7.0: rewrite AI cloud base URL to CN endpoint. Default true (A/B test). */
+    public static final String KEY_FORCE_CN_CLOUD_ENDPOINT = "force_cn_cloud_endpoint";
+    /** Effective cloud endpoint reported by mediaeditor (rewritten/off/none). */
+    public static final String KEY_CLOUD_ENDPOINT = "cloud_endpoint";
 
     /** Defaults (also used when the provider is unreachable). */
     public static final boolean DEFAULT_ENABLE_GATE_BYPASS = true;
@@ -64,6 +70,7 @@ public final class ModuleConfig {
     public static final boolean DEFAULT_FORCE_LEGEND_FALLBACK = true;
     public static final boolean DEFAULT_FORCE_LEGEND_CLOUD_PARAMS = true;
     public static final boolean DEFAULT_SYNC_CN_CAMERA_MAKERNOTE = true;
+    public static final boolean DEFAULT_FORCE_CN_CLOUD_ENDPOINT = true;
 
     private ModuleConfig() {
     }
@@ -99,6 +106,9 @@ public final class ModuleConfig {
         b.putString("cloud_trace", p.getString(KEY_CLOUD_TRACE, ""));
         b.putString("legend_fallback_target", p.getString(KEY_LEGEND_FALLBACK_TARGET, ""));
         b.putString("camera_makernote", p.getString(KEY_CAMERA_MAKERNOTE_TARGET, ""));
+        b.putBoolean("force_cn_cloud_endpoint",
+                p.getBoolean(KEY_FORCE_CN_CLOUD_ENDPOINT, DEFAULT_FORCE_CN_CLOUD_ENDPOINT));
+        b.putString("cloud_endpoint", p.getString(KEY_CLOUD_ENDPOINT, ""));
         b.putString("cloud_capture", p.getString(KEY_CLOUD_CAPTURE, ""));
         b.putString("module_version", MODULE_VERSION);
         return b;
