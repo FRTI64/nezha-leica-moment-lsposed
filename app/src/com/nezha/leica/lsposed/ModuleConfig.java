@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "2.7.3";
+    public static final String MODULE_VERSION = "2.7.5";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
@@ -66,6 +66,8 @@ public final class ModuleConfig {
     public static final String KEY_CLOUD_ENDPOINT = "cloud_endpoint";
     /** v2.7.1: simulate CN region flag so cloud config returns the real CN base URL. Default true. */
     public static final String KEY_SIMULATE_CN_REGION = "simulate_cn_region";
+    /** v2.7.5: log camera CaptureRequest vendor params (legendMode/sessionparams). Default true. */
+    public static final String KEY_TRACE_CAPTURE_PARAMS = "trace_capture_params";
     /** simulated | off | none (reported by mediaeditor process). */
     public static final String KEY_CN_REGION = "cn_region";
 
@@ -78,6 +80,7 @@ public final class ModuleConfig {
     public static final boolean DEFAULT_SYNC_CN_CAMERA_MAKERNOTE = true;
     public static final boolean DEFAULT_FORCE_CN_CLOUD_ENDPOINT = false;
     public static final boolean DEFAULT_SIMULATE_CN_REGION = true;
+    public static final boolean DEFAULT_TRACE_CAPTURE_PARAMS = true;
 
     private ModuleConfig() {
     }
@@ -117,6 +120,8 @@ public final class ModuleConfig {
                 p.getBoolean(KEY_FORCE_CN_CLOUD_ENDPOINT, DEFAULT_FORCE_CN_CLOUD_ENDPOINT));
         b.putBoolean("simulate_cn_region",
                 p.getBoolean(KEY_SIMULATE_CN_REGION, DEFAULT_SIMULATE_CN_REGION));
+        b.putBoolean("trace_capture_params",
+                p.getBoolean(KEY_TRACE_CAPTURE_PARAMS, DEFAULT_TRACE_CAPTURE_PARAMS));
         b.putString("cloud_endpoint", p.getString(KEY_CLOUD_ENDPOINT, ""));
         b.putString("cn_region", p.getString(KEY_CN_REGION, ""));
         b.putString("cloud_capture", p.getString(KEY_CLOUD_CAPTURE, ""));
