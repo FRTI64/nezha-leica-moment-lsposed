@@ -102,6 +102,7 @@ public class CookieConfigProvider extends ContentProvider {
                 config.putString("cookie", "");
                 config.putString("cloud_trace", "");
                 config.putString("cloud_capture", "");
+                config.putString("cloud_endpoint", "");
             }
             return config;
         }
@@ -127,6 +128,31 @@ public class CookieConfigProvider extends ContentProvider {
                 Log.i(TAG, "CookieConfigProvider: cloud trace stored (" + lines
                         + " lines, no token values)");
                 out.putBoolean("ok", true);
+            } catch (Throwable t) {
+                out.putBoolean("ok", false);
+            }
+            return out;
+        }
+
+        if (ModuleConfig.METHOD_SET_CLOUD_ENDPOINT.equals(method)) {
+            Bundle out = new Bundle();
+            if (CAMERA_PACKAGE.equals(callerPackage)) {
+                out.putBoolean("ok", false);
+                return out;
+            }
+            String url = extras == null ? null : extras.getString("url");
+            if (url == null || url.isEmpty()) {
+                url = "none";
+            }
+            if (url.length() > 200) {
+                url = url.substring(0, 200);
+            }
+            try {
+                ModuleConfig.prefs(ctx).edit()
+                        .putString(ModuleConfig.KEY_CLOUD_ENDPOINT, url)
+                        .apply();
+                out.putBoolean("ok", true);
+                Log.i(TAG, "CookieConfigProvider: cloud_endpoint=" + url);
             } catch (Throwable t) {
                 out.putBoolean("ok", false);
             }
