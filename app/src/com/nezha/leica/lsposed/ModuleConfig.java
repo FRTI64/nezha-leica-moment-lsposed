@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "2.6.0";
+    public static final String MODULE_VERSION = "2.6.1";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
@@ -31,6 +31,8 @@ public final class ModuleConfig {
     public static final String METHOD_SET_LEGEND_FALLBACK_TARGET = "set_legend_fallback_target";
     /** camera process reports which MakerNote tag-map variant was extended (CN|GLOBAL|none). */
     public static final String METHOD_SET_CAMERA_MAKERNOTE_TARGET = "set_camera_makernote_target";
+    /** v2.6.1: capture create-request JSON + server response body (local only, last 8). */
+    public static final String METHOD_APPEND_CLOUD_CAPTURE = "append_cloud_capture";
 
     public static final String KEY_COOKIE = "cookie";
     public static final String KEY_ENABLE_GATE_BYPASS = "enable_gate_bypass";
@@ -52,6 +54,8 @@ public final class ModuleConfig {
     public static final String KEY_LEGEND_FALLBACK_TARGET = "legend_fallback_target";
     /** CN | GLOBAL | none (which camera MakerNote map was extended). */
     public static final String KEY_CAMERA_MAKERNOTE_TARGET = "camera_makernote";
+    /** Newline-joined last 8 captured cloud payloads (request/response JSON, local only). */
+    public static final String KEY_CLOUD_CAPTURE = "cloud_capture";
 
     /** Defaults (also used when the provider is unreachable). */
     public static final boolean DEFAULT_ENABLE_GATE_BYPASS = true;
@@ -95,6 +99,7 @@ public final class ModuleConfig {
         b.putString("cloud_trace", p.getString(KEY_CLOUD_TRACE, ""));
         b.putString("legend_fallback_target", p.getString(KEY_LEGEND_FALLBACK_TARGET, ""));
         b.putString("camera_makernote", p.getString(KEY_CAMERA_MAKERNOTE_TARGET, ""));
+        b.putString("cloud_capture", p.getString(KEY_CLOUD_CAPTURE, ""));
         b.putString("module_version", MODULE_VERSION);
         return b;
     }
