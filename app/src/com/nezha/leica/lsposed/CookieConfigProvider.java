@@ -131,6 +131,27 @@ public class CookieConfigProvider extends ContentProvider {
             return out;
         }
 
+        if (ModuleConfig.METHOD_SET_LEGEND_FALLBACK_TARGET.equals(method)) {
+            Bundle out = new Bundle();
+            String target = extras == null ? null : extras.getString("target");
+            if (target == null || target.isEmpty()) {
+                target = "none";
+            }
+            if (!"CN".equals(target) && !"GLOBAL".equals(target)) {
+                target = "none";
+            }
+            try {
+                ModuleConfig.prefs(ctx).edit()
+                        .putString(ModuleConfig.KEY_LEGEND_FALLBACK_TARGET, target)
+                        .apply();
+                out.putBoolean("ok", true);
+                Log.i(TAG, "CookieConfigProvider: legend_fallback_target=" + target);
+            } catch (Throwable t) {
+                out.putBoolean("ok", false);
+            }
+            return out;
+        }
+
         if (ModuleConfig.METHOD_GET_CLOUD_TRACE.equals(method)) {
             Bundle out = new Bundle();
             out.putString("trace", ModuleConfig.prefs(ctx)
