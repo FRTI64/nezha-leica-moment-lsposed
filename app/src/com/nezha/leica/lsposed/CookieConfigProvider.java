@@ -3,6 +3,7 @@ package com.nezha.leica.lsposed;
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
@@ -100,6 +101,7 @@ public class CookieConfigProvider extends ContentProvider {
                 // the user cookie or diagnostics to it.
                 config.putString("cookie", "");
                 config.putString("cloud_trace", "");
+                config.putString("cloud_capture", "");
             }
             return config;
         }
@@ -125,6 +127,56 @@ public class CookieConfigProvider extends ContentProvider {
                 Log.i(TAG, "CookieConfigProvider: cloud trace stored (" + lines
                         + " lines, no token values)");
                 out.putBoolean("ok", true);
+            } catch (Throwable t) {
+                out.putBoolean("ok", false);
+            }
+            return out;
+        }
+
+        if (ModuleConfig.METHOD_APPEND_CLOUD_CAPTURE.equals(method)) {
+            Bundle out = new Bundle();
+            if (CAMERA_PACKAGE.equals(callerPackage)) {
+                out.putBoolean("ok", false);
+                return out;
+            }
+            String tag = extras == null ? "" : extras.getString("tag", "");
+            String text = extras == null ? "" : extras.getString("text", "");
+            if (tag == null) {
+                tag = "";
+            }
+            if (text == null) {
+                text = "";
+            }
+            if (text.length() > 600) {
+                text = text.substring(0, 600) + "\u2026";
+            }
+            try {
+                SharedPreferences p = ModuleConfig.prefs(ctx);
+                String previous = p.getString(ModuleConfig.KEY_CLOUD_CAPTURE, "");
+                java.util.LinkedList<String> lines = new java.util.LinkedList<String>();
+                if (previous != null && !previous.isEmpty()) {
+                    String[] old = previous.split("\n");
+                    for (int i = 0; i < old.length; i++) {
+                        if (!old[i].isEmpty()) {
+                            lines.add(old[i]);
+                        }
+                    }
+                }
+                lines.add(tag + "=" + text);
+                while (lines.size() > 8) {
+                    lines.removeFirst();
+                }
+                StringBuilder sb = new StringBuilder();
+                for (String line : lines) {
+                    if (sb.length() > 0) {
+                        sb.append('\n');
+                    }
+                    sb.append(line);
+                }
+                p.edit().putString(ModuleConfig.KEY_CLOUD_CAPTURE, sb.toString()).apply();
+                out.putBoolean("ok", true);
+                Log.i(TAG, "CookieConfigProvider: cloud capture appended tag=" + tag
+                        + " chars=" + text.length() + " (local only)");
             } catch (Throwable t) {
                 out.putBoolean("ok", false);
             }
