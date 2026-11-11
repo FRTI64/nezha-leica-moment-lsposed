@@ -5,7 +5,9 @@ import android.os.Bundle;
 
 import android.app.AndroidAppHelper;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
@@ -156,6 +158,21 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static final ArrayDeque<String> sCloudTrace = new ArrayDeque<String>();
     private static volatile String sCloudTraceJoined = "";
 
+    /** v2.5.1 option B: legend version fallback injection targets/descriptors. */
+    private static final String LEGEND_RESOLVER_CLASS = "lv.j0";
+    private static final String LEGEND_RESULT_CLASS_NAME = "lv.d0";
+    private static final String LEGEND_RESULT_CLASS = "Llv/d0;";
+    private static final String LEGEND_V2_CLASS = "lv.i0";
+    private static final String LEGEND_INFO_CLASS = "com.miui.mediaeditor.legendary.e";
+
+    private static volatile Constructor<?> sLegendCtor;
+    private static volatile Object sLegendV2;
+    private static volatile Object sLegendM3;
+    private static volatile Object sLegendF;
+    private static volatile boolean sLegendReady;
+    private static volatile boolean sLegendWarned;
+    private static volatile boolean sLegendLogged;
+
     private static volatile Bundle sConfig;
     private static volatile long sConfigTs;
     private static volatile Context sAppContext;
@@ -195,6 +212,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookCookieProviders(lpparam);
             hookCloudTrace(lpparam);
             hookAccountProbe(lpparam);
+            hookLegendFallback(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
             log("FATAL hook installation error: " + t);
@@ -709,6 +727,154 @@ public class HookEntry implements IXposedHookLoadPackage {
             }
         }
         return false;
+    }
+
+    // ---------------------------------------------------------------------
+    // (1d) Legend version fallback injection (v2.5.1 option B, default on)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Hooks the mediaeditor LegendaryVersionResolver factory so decodeImage takes
+     * the V2/M3 built-in fallback path even when the photo has NO Xiaomi maker
+     * note: the result of {@code lv.j0.a(..)} / {@code lv.j0.b(..)} is replaced by
+     * a crafted {@code lv.d0(lv.i0.b (V2), legendary.e.c (M3), Boolean.TRUE, legendary.e.f)} instance. Fully fail-safe: any missing class/field/method is
+     * logged and skipped, never crashing the app.
+     */
+    private static void hookLegendFallback(XC_LoadPackage.LoadPackageParam lpparam) {
+        Class<?> resolver;
+        try {
+            resolver = XposedHelpers.findClass(LEGEND_RESOLVER_CLASS, lpparam.classLoader);
+        } catch (Throwable t) {
+            log("legend fallback: class " + LEGEND_RESOLVER_CLASS
+                    + " not present on this version (skip)");
+            return;
+        }
+        int installed = 0;
+        Method[] methods = resolver.getDeclaredMethods();
+        for (int i = 0; i < methods.length; i++) {
+            final Method m = methods[i];
+            try {
+                if (!Modifier.isStatic(m.getModifiers())) {
+                    continue;
+                }
+                final String methodName = m.getName();
+                Class<?>[] ps = m.getParameterTypes();
+                boolean isA = methodName.equals("a") && ps.length == 1;
+                boolean isB = methodName.equals("b") && ps.length == 2
+                        && ps[0] == String.class;
+                if (!isA && !isB) {
+                    continue;
+                }
+                if (!m.getReturnType().getName().equals(LEGEND_RESULT_CLASS_NAME)) {
+                    continue;
+                }
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            if (!legendFallbackEnabled()) {
+                                return;
+                            }
+                            Object crafted = buildLegendFallback(lpparam.classLoader);
+                            if (crafted != null) {
+                                param.setResult(crafted);
+                                if (!sLegendLogged) {
+                                    sLegendLogged = true;
+                                    log("legend fallback injected: " + LEGEND_RESOLVER_CLASS
+                                            + "." + methodName + " -> " + LEGEND_RESULT_CLASS
+                                            + " (V2/M3/TRUE/f; cleaned upload fallback path enabled)");
+                                }
+                            }
+                        } catch (Throwable t) {
+                            if (!sLegendWarned) {
+                                sLegendWarned = true;
+                                log("legend fallback injection failed (fail-safe skip): " + t);
+                            }
+                        }
+                    }
+                });
+                installed++;
+                log("legend fallback hook installed: " + LEGEND_RESOLVER_CLASS + "."
+                        + methodName + " -> " + LEGEND_RESULT_CLASS);
+            } catch (Throwable t) {
+                log("legend fallback hookMethod failed: " + m.getName() + " -> " + t);
+            }
+        }
+        if (installed == 0) {
+            log("WARN: no legend fallback target hooked (lv.j0.a/b shape differs on this version)");
+        }
+    }
+
+    private static boolean legendFallbackEnabled() {
+        try {
+            return config().getBoolean("force_legend_fallback",
+                    ModuleConfig.DEFAULT_FORCE_LEGEND_FALLBACK);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private static Object buildLegendFallback(ClassLoader loader) throws Throwable {
+        if (sLegendReady && sLegendCtor != null) {
+            return sLegendCtor.newInstance(sLegendV2, sLegendM3, Boolean.TRUE, sLegendF);
+        }
+        synchronized (HookEntry.class) {
+            if (sLegendReady && sLegendCtor != null) {
+                return sLegendCtor.newInstance(sLegendV2, sLegendM3, Boolean.TRUE, sLegendF);
+            }
+            Class<?> d0 = XposedHelpers.findClass(LEGEND_RESULT_CLASS_NAME, loader);
+            Class<?> i0 = XposedHelpers.findClass(LEGEND_V2_CLASS, loader);
+            Class<?> info = XposedHelpers.findClass(LEGEND_INFO_CLASS, loader);
+            Object v2 = XposedHelpers.getStaticObjectField(i0, "b"); // lv.i0.b = V2
+            Object m3 = XposedHelpers.getStaticObjectField(info, "c"); // legendary.e.c = M3
+            Object f;
+            try {
+                f = XposedHelpers.getStaticObjectField(info, "f");
+            } catch (Throwable t) {
+                f = XposedHelpers.getStaticObjectField(info, "d"); // fallback constant
+            }
+            Constructor<?> ctor = findLegendConstructor(d0, i0, info);
+            if (ctor == null) {
+                throw new NoSuchMethodException("lv.d0 has no (lv.i0, legendary.e, Boolean, legendary.e) constructor");
+            }
+            sLegendCtor = ctor;
+            sLegendV2 = v2;
+            sLegendM3 = m3;
+            sLegendF = f;
+            sLegendReady = true;
+            log("legend fallback: resolved lv.d0 constructor + V2/M3/f enums");
+            return ctor.newInstance(v2, m3, Boolean.TRUE, f);
+        }
+    }
+
+    private static Constructor<?> findLegendConstructor(Class<?> d0, Class<?> i0, Class<?> info) {
+        Constructor<?>[] ctors = d0.getDeclaredConstructors();
+        for (int i = 0; i < ctors.length; i++) {
+            Constructor<?> c = ctors[i];
+            Class<?>[] ps = c.getParameterTypes();
+            if (ps.length != 4) {
+                continue;
+            }
+            if (!(ps[2] == boolean.class || ps[2] == Boolean.class)) {
+                continue;
+            }
+            if (!acceptParam(ps[0], i0) || !acceptParam(ps[1], info) || !acceptParam(ps[3], info)) {
+                continue;
+            }
+            try {
+                c.setAccessible(true);
+            } catch (Throwable ignored) {
+            }
+            return c;
+        }
+        return null;
+    }
+
+    private static boolean acceptParam(Class<?> param, Class<?> valueClass) {
+        if (param == null || valueClass == null) {
+            return false;
+        }
+        return param.equals(valueClass) || param.isAssignableFrom(valueClass);
     }
 
     // ---------------------------------------------------------------------
