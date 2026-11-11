@@ -4,6 +4,15 @@
 > 版本：`versionCode 21 / versionName 2.7.0`，70,244 B，sha256 `058c44660c155abdd7bbd3e0a34c57cc2118b34caf68a492f7ef1bc1552ceb7b`（两次构建字节一致）
 > 目标：小米 17 Ultra（`nezha` / `nezha_global`），HyperOS 4 / Android 17；`com.miui.mediaeditor`（相册-编辑）、可选 `com.android.camera`（配 Magisk CameraOnly）、`com.miui.gallery`（占位）
 >
+### 最终结论（真机实测，v2.7.0）
+
+1. **客户端全链路已打通**：门禁解锁、Cookie 注入、上传、create 请求（含参数）、MakerNote 回落、响应捕获均正常。
+2. **国际版端点服务端故障**：`sgp-ai-photo.engine.intl.miui.com` 的 create 返回 `code=20090002`，响应 body 明确为
+   `MySQLSyntaxErrorException: Table 'ai_platform.ai_billing_record' doesn't exist`（计费表缺失）→ 国际版后台未部署，客户端无法修复。
+3. **CN 端点重定向不可用**：v2.7.0 把基址改为 `https://api.open.ai.xiaomi.com` 后，`/aiPhotoCloud/api/file/upload` 与 `/aiPhotoCloud/api/legendV2/list` 均返回 **404**。说明 CN 版真正的 AI 照片云基址不是 `api.open.ai.xiaomi.com`（该 host 只承载 auth 等接口），而是由 **CN 区域云配置动态下发**的另一个域名；在 Global ROM（`ro.miui.build.region=global`）下配置服务不会下发 CN 域名，海外网络也无法解析/访问。
+4. 因此：**在 Global ROM 上，「二次增强」无法完成服务端 create**。若要真正使用，需要 **CN ROM/CN 区域环境**（配置会下发 CN 云基址，且国内网络可访问），或从一台真实 CN 徕卡设备获取其云配置下发的实际域名后硬编码（仍受区域风控限制）。
+
+
 > ✅ **本版本完全不伪装系统属性**：不做 `resetprop`、不 hook `android.os.SystemProperties`、不修改任何 `ro.*` 值。改为**直接 hook App 内部的门禁判定方法**返回 `true`（只影响被 hook 的两个进程）。仍为静态分析产物，**未真机运行验证**。
 
 > **v2.7.0 新增（云端点重定向到 CN）**：v2.6.2 抓到的服务端响应 body 证明 **国际版端点本身是坏的**：
