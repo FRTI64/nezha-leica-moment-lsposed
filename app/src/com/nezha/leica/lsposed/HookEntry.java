@@ -208,6 +208,12 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static final int CAMERA_MOMENT_TAG_TYPE = 4;
     private static volatile boolean sCameraMakerNoteWarned;
 
+    /** v2.6.1: capture legend create JSON + server response body (local only, no tokens). */
+    private static final String LEGEND_CREATE_ADAPTER_CLASS =
+            "com.miui.mediaeditor.aigc.cloud.internal.legend.api.entity.CreateLegendV2TaskParamsJsonAdapter";
+    private static final String CLOUD_RESPONSE_BODY_CLASS = "b11.f0";
+    private static volatile boolean sCloudCaptureWarned;
+
     private static volatile Constructor<?> sLegendCtor;
     private static volatile Object sLegendV2;
     private static volatile Object sLegendM3;
@@ -261,6 +267,8 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookLegendFallback(lpparam);
             hookMakerNoteFallback(lpparam);
             hookLegendCloudParams(lpparam);
+            hookLegendCreateBodyCapture(lpparam);
+            hookCloudResponseBodyCapture(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
             log("FATAL hook installation error: " + t);
@@ -1446,6 +1454,171 @@ public class HookEntry implements IXposedHookLoadPackage {
             out = out.substring(0, maxChars) + "\u2026";
         }
         return out;
+    }
+
+    // ---------------------------------------------------------------------
+    // (1g) Cloud payload capture (v2.6.1: create JSON + server response body)
+    // ---------------------------------------------------------------------
+
+    /** Captures the serialized CreateLegendV2TaskParams JSON (Moshi adapter output). */
+    private static void hookLegendCreateBodyCapture(XC_LoadPackage.LoadPackageParam lpparam) {
+        Class<?> adapter;
+        try {
+            adapter = XposedHelpers.findClass(LEGEND_CREATE_ADAPTER_CLASS, lpparam.classLoader);
+        } catch (Throwable t) {
+            log("cloud capture: " + LEGEND_CREATE_ADAPTER_CLASS + " not present (skip)");
+            return;
+        }
+        int hooked = 0;
+        Method[] methods = adapter.getDeclaredMethods();
+        for (int i = 0; i < methods.length; i++) {
+            final Method m = methods[i];
+            try {
+                if (!m.getName().equals("toJson")) {
+                    continue;
+                }
+                if (m.getReturnType() != String.class) {
+                    continue;
+                }
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object result = param.getResult();
+                            if (!(result instanceof String)) {
+                                return;
+                            }
+                            String json = sanitizeCaptureText((String) result, 600);
+                            if (json.isEmpty()) {
+                                return;
+                            }
+                            log("legend_create_body=" + json);
+                            storeCloudCapture("legend_create_body", json);
+                        } catch (Throwable t) {
+                            if (!sCloudCaptureWarned) {
+                                sCloudCaptureWarned = true;
+                                log("cloud capture (create body) failed (fail-safe): " + t);
+                            }
+                        }
+                    }
+                });
+                hooked++;
+            } catch (Throwable t) {
+                log("cloud capture create-body hook failed: " + t);
+            }
+        }
+        log(hooked > 0
+                ? "cloud capture hook installed: CreateLegendV2TaskParamsJsonAdapter.toJson"
+                : "WARN: CreateLegendV2TaskParamsJsonAdapter.toJson(String) not found");
+    }
+
+    /** Captures server response JSON via the obfuscated OkHttp ResponseBody.string() getter. */
+    private static void hookCloudResponseBodyCapture(XC_LoadPackage.LoadPackageParam lpparam) {
+        Class<?> bodyClass;
+        try {
+            bodyClass = XposedHelpers.findClass(CLOUD_RESPONSE_BODY_CLASS, lpparam.classLoader);
+        } catch (Throwable t) {
+            log("cloud capture: response body class " + CLOUD_RESPONSE_BODY_CLASS
+                    + " not present (skip)");
+            return;
+        }
+        int hooked = 0;
+        Method[] methods = bodyClass.getDeclaredMethods();
+        for (int i = 0; i < methods.length; i++) {
+            final Method m = methods[i];
+            try {
+                if (m.getParameterTypes().length != 0) {
+                    continue;
+                }
+                if (m.getReturnType() != String.class) {
+                    continue;
+                }
+                if (!m.getName().equals("h") && hooked > 0) {
+                    continue;
+                }
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object result = param.getResult();
+                            if (!(result instanceof String)) {
+                                return;
+                            }
+                            String raw = (String) result;
+                            if (raw.length() > 4000) {
+                                return;
+                            }
+                            String lower = raw.toLowerCase(Locale.US);
+                            if (!lower.contains("\"code\"") && !lower.contains("\"error\"")
+                                    && !lower.contains("\"message\"") && !lower.contains("errorcode")) {
+                                return;
+                            }
+                            String snippet = sanitizeCaptureText(raw, 600);
+                            if (snippet.isEmpty()) {
+                                return;
+                            }
+                            log("cloud_resp_body=" + snippet);
+                            storeCloudCapture("cloud_resp_body", snippet);
+                        } catch (Throwable t) {
+                            if (!sCloudCaptureWarned) {
+                                sCloudCaptureWarned = true;
+                                log("cloud capture (response body) failed (fail-safe): " + t);
+                            }
+                        }
+                    }
+                });
+                hooked++;
+            } catch (Throwable t) {
+                log("cloud capture response-body hook failed: " + t);
+            }
+        }
+        log(hooked > 0
+                ? "cloud capture hook installed: ResponseBody.string getter (" + CLOUD_RESPONSE_BODY_CLASS + ")"
+                : "WARN: ResponseBody string getter not found in " + CLOUD_RESPONSE_BODY_CLASS);
+    }
+
+    /** Sanitizes captured JSON: control chars stripped, token-ish values redacted, capped. */
+    private static String sanitizeCaptureText(String raw, int maxChars) {
+        if (raw == null || raw.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '\n' || c == '\r' || c == '\t') {
+                sb.append(' ');
+            } else if (c >= 32 && c != 127) {
+                sb.append(c);
+            }
+        }
+        String out = sb.toString().replaceAll("\\s+", " ").trim();
+        out = out.replaceAll(
+                "(?i)(\"?(?:cookie|passToken|serviceToken|token|signature|authorization)\"?\\s*[:=]\\s*\")[^\"]*\"",
+                "$1***\"");
+        if (out.length() > maxChars) {
+            out = out.substring(0, maxChars) + "\u2026";
+        }
+        return out;
+    }
+
+    /** Stores a captured payload via the provider (last 8 entries, local only). */
+    private static void storeCloudCapture(String tag, String text) {
+        try {
+            Context ctx = appContext();
+            if (ctx == null) {
+                return;
+            }
+            Bundle extras = new Bundle();
+            extras.putString("tag", tag);
+            extras.putString("text", text);
+            ctx.getContentResolver().call(ModuleConfig.providerUri(),
+                    ModuleConfig.METHOD_APPEND_CLOUD_CAPTURE, null, extras);
+        } catch (Throwable t) {
+            if (!sCloudCaptureWarned) {
+                sCloudCaptureWarned = true;
+                log("cloud capture persist failed (fail-safe): " + t);
+            }
+        }
     }
 
     // ---------------------------------------------------------------------
