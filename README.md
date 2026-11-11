@@ -85,6 +85,12 @@ VERSION_CODE=5 VERSION_NAME=2.1.0 ./build.sh app dist/LeicaMoment_LSPosed_v2.1.0
 - dex 中**不存在** `ro.theme_customize`/`ro.miui.build.region`/`ro.theme_leica`/`ro.special_edition`/`SPOOF_PROPS`/`hookSystemProperties`/`resetprop`（零属性伪装证据）。
 - Hook 目标均有两版 smali 证据（`docs/`）。
 
+## 5.16 最终结论（真机实测，v2.7.0）
+
+- 国际版端点 `sgp-ai-photo.engine.intl.miui.com` 的 create 返回 `code=20090002`，响应 body 明确为 `MySQLSyntaxErrorException: Table 'ai_platform.ai_billing_record' doesn't exist` → **国际版后台缺计费表，服务端故障**。
+- v2.7.0 重定向到 `https://api.open.ai.xiaomi.com` 后，`/aiPhotoCloud/api/file/upload`、`/aiPhotoCloud/api/legendV2/list` 均 **404** → 该 host 不承载 CN AI 照片云；真正 CN 基址由 CN 区域云配置动态下发，Global ROM 不会拿到。
+- 因此 **Global ROM 上「二次增强」无法完成服务端 create**；客户端（门禁/Cookie/上传/参数/MakerNote/报文捕获）已全部就绪。要真正使用需 CN ROM/CN 区域环境。
+
 ## 5.15 v2.7.0 新增：云端点重定向到 CN
 
 v2.6.2 抓到的服务端响应证明国际版端点本身损坏：`code=20090002` + `MySQLSyntaxErrorException: Table 'ai_platform.ai_billing_record' doesn't exist`（`sgp-ai-photo.engine.intl.miui.com` 缺计费表）。v2.7.0 hook 云基址提供者（GLOBAL `jq.d.a` / CN `nm.c.a`），把 `intl.miui.com` 改写为 `https://api.open.ai.xiaomi.com`（默认开 `force_cn_cloud_endpoint`），诊断显示 `cloud_endpoint=`；报文捕获仍可看到 CN 端点的真实响应。
