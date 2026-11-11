@@ -131,6 +131,27 @@ public class CookieConfigProvider extends ContentProvider {
             return out;
         }
 
+        if (ModuleConfig.METHOD_SET_CAMERA_MAKERNOTE_TARGET.equals(method)) {
+            Bundle out = new Bundle();
+            String target = extras == null ? null : extras.getString("target");
+            if (target == null || target.isEmpty()) {
+                target = "none";
+            }
+            if (!"CN".equals(target) && !"GLOBAL".equals(target)) {
+                target = "none";
+            }
+            try {
+                ModuleConfig.prefs(ctx).edit()
+                        .putString(ModuleConfig.KEY_CAMERA_MAKERNOTE_TARGET, target)
+                        .apply();
+                out.putBoolean("ok", true);
+                Log.i(TAG, "CookieConfigProvider: camera_makernote=" + target);
+            } catch (Throwable t) {
+                out.putBoolean("ok", false);
+            }
+            return out;
+        }
+
         if (ModuleConfig.METHOD_SET_LEGEND_FALLBACK_TARGET.equals(method)) {
             Bundle out = new Bundle();
             String target = extras == null ? null : extras.getString("target");
