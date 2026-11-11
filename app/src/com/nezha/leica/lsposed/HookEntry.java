@@ -208,6 +208,13 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static final int CAMERA_MOMENT_TAG_TYPE = 4;
     private static volatile boolean sCameraMakerNoteWarned;
 
+    /** v2.7.5: camera CaptureRequest vendor-param trace (legendMode / sessionparams). */
+    private static final String CAPTURE_REQUEST_BUILDER_CLASS =
+            "android.hardware.camera2.CaptureRequest$Builder";
+    private static final java.util.Set<String> sLoggedCaptureParams =
+            new java.util.HashSet<String>();
+    private static volatile boolean sCaptureParamWarned;
+
     /** v2.6.1: capture legend create JSON + server response body (local only, no tokens). */
     private static final String LEGEND_CREATE_ADAPTER_CLASS =
             "com.miui.mediaeditor.aigc.cloud.internal.legend.api.entity.CreateLegendV2TaskParamsJsonAdapter";
@@ -309,6 +316,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                 // app's own Java gates; no property reads or writes anywhere.
                 hookCameraGates(lpparam);
                 hookCameraMakerNoteMap(lpparam);
+                hookCaptureParamTrace(lpparam);
                 log("camera: all hook installers finished for " + pkg);
                 return;
             }
@@ -447,32 +455,53 @@ public class HookEntry implements IXposedHookLoadPackage {
             try {
                 cls = XposedHelpers.findClass(className, lpparam.classLoader);
             } catch (Throwable t) {
-                log("camera makernote: " + label + " class " + className
-                        + " not present (skip)");
+                log("camera makernote: " + className + " rejected (class not present)");
+                continue;
+            }
+            // Validate static HashMap d/e BEFORE attempting injection: on the GLOBAL
+            // camera an unrelated class Bf.g exists without these fields, so a failed
+            // candidate must fall through to Ig.g instead of aborting the installer.
+            Object dObj = null;
+            Object eObj = null;
+            try {
+                dObj = XposedHelpers.getStaticObjectField(cls, "d");
+            } catch (Throwable ignored) {
+            }
+            try {
+                eObj = XposedHelpers.getStaticObjectField(cls, "e");
+            } catch (Throwable ignored) {
+            }
+            if (!(dObj instanceof Map)) {
+                log("camera makernote: " + className
+                        + " rejected (static map d missing/null/not HashMap)");
+                continue;
+            }
+            if (!(eObj instanceof Map)) {
+                log("camera makernote: " + className
+                        + " rejected (static map e missing/null/not HashMap)");
                 continue;
             }
             try {
-                boolean extended = extendCameraMakerNoteMaps(cls, className, label);
-                reportCameraMakerNoteTarget(label);
-                if (extended) {
-                    log("camera makernote map extended: +5 Moment tags (" + label
-                            + "=" + className + ")");
-                } else {
-                    log("camera makernote map already contains Moment tags or was not modifiable ("
-                            + label + "=" + className + ")");
+                boolean ok = extendCameraMakerNoteMaps(cls, className, label,
+                        (Map<?, ?>) dObj, (Map<?, ?>) eObj);
+                if (!ok) {
+                    log("camera makernote: " + className
+                            + " rejected (no entry ctor / injection failed)");
+                    continue;
                 }
+                reportCameraMakerNoteTarget(label);
                 return;
             } catch (Throwable t) {
                 if (!sCameraMakerNoteWarned) {
                     sCameraMakerNoteWarned = true;
                     log("camera makernote map extension failed (fail-safe skip): " + t);
                 }
-                reportCameraMakerNoteTarget("none");
-                return;
+                log("camera makernote: " + className + " rejected (exception: " + t + ")");
+                continue;
             }
         }
         reportCameraMakerNoteTarget("none");
-        log("WARN: no camera makernote map class matched (CN Bf.g / GLOBAL Ig.g absent)");
+        log("WARN: no valid camera makernote map class found (CN Bf.g / GLOBAL Ig.g)");
     }
 
     private static boolean syncCameraMakerNoteEnabled() {
@@ -485,33 +514,20 @@ public class HookEntry implements IXposedHookLoadPackage {
     }
 
     @SuppressWarnings("unchecked")
-    private static boolean extendCameraMakerNoteMaps(Class<?> cls, String className, String label)
-            throws Throwable {
-        Object dObj = null;
-        Object eObj = null;
-        try {
-            dObj = XposedHelpers.getStaticObjectField(cls, "d");
-        } catch (Throwable ignored) {
-        }
-        try {
-            eObj = XposedHelpers.getStaticObjectField(cls, "e");
-        } catch (Throwable ignored) {
-        }
-        if (!(dObj instanceof Map) && !(eObj instanceof Map)) {
-            log("camera makernote: " + className + " has no static map d/e fields");
-            return false;
-        }
-        Map<Object, Object> dMap = (dObj instanceof Map) ? (Map<Object, Object>) dObj : null;
-        Map<Object, Object> eMap = (eObj instanceof Map) ? (Map<Object, Object>) eObj : null;
+    private static boolean extendCameraMakerNoteMaps(Class<?> cls, String className,
+                                                     String label, Map<?, ?> dMapRaw,
+                                                     Map<?, ?> eMapRaw) throws Throwable {
+        Map<Object, Object> dMap = (Map<Object, Object>) dMapRaw;
+        Map<Object, Object> eMap = (Map<Object, Object>) eMapRaw;
 
         Class<?> entryClass = null;
-        if (dMap != null && !dMap.isEmpty()) {
+        if (!dMap.isEmpty()) {
             Object first = dMap.values().iterator().next();
             if (first != null) {
                 entryClass = first.getClass();
             }
         }
-        if (entryClass == null && eMap != null && !eMap.isEmpty()) {
+        if (entryClass == null && !eMap.isEmpty()) {
             Object first = eMap.values().iterator().next();
             if (first != null) {
                 entryClass = first.getClass();
@@ -522,7 +538,8 @@ public class HookEntry implements IXposedHookLoadPackage {
             try {
                 entryClass = XposedHelpers.findClass(entryName, cls.getClassLoader());
             } catch (Throwable t) {
-                log("camera makernote: entry class " + entryName + " not found");
+                log("camera makernote: entry class " + entryName
+                        + " not found in " + className);
                 return false;
             }
         }
@@ -552,11 +569,8 @@ public class HookEntry implements IXposedHookLoadPackage {
         for (int i = 0; i < CAMERA_MOMENT_TAG_IDS.length; i++) {
             String name = CAMERA_MOMENT_TAG_NAMES[i];
             int id = CAMERA_MOMENT_TAG_IDS[i];
-            Object entry = null;
-            if (dMap != null) {
-                entry = dMap.get(Integer.valueOf(id));
-            }
-            if (entry == null && eMap != null) {
+            Object entry = dMap.get(Integer.valueOf(id));
+            if (entry == null) {
                 entry = eMap.get(name);
             }
             if (entry == null) {
@@ -564,18 +578,15 @@ public class HookEntry implements IXposedHookLoadPackage {
                         Integer.valueOf(CAMERA_MOMENT_TAG_TYPE));
                 added++;
             }
-            if (dMap != null && !dMap.containsKey(Integer.valueOf(id))) {
+            if (!dMap.containsKey(Integer.valueOf(id))) {
                 dMap.put(Integer.valueOf(id), entry);
             }
-            if (eMap != null && !eMap.containsKey(name)) {
+            if (!eMap.containsKey(name)) {
                 eMap.put(name, entry);
             }
             newEntries[newEntryCount++] = entry;
         }
-        if (added == 0) {
-            return false;
-        }
-        // Optional: append the new entries to the static array c (rebuilt).
+        // Optional: append the moment entries to the static array c (rebuilt).
         try {
             Object arrayObj = XposedHelpers.getStaticObjectField(cls, "c");
             if (arrayObj != null && arrayObj.getClass().isArray()) {
@@ -590,6 +601,31 @@ public class HookEntry implements IXposedHookLoadPackage {
             }
         } catch (Throwable ignored) {
             // optional only
+        }
+
+        // Verify all 5 Moment keys are actually present after injection.
+        int present = 0;
+        for (int i = 0; i < CAMERA_MOMENT_TAG_IDS.length; i++) {
+            if (dMap.get(Integer.valueOf(CAMERA_MOMENT_TAG_IDS[i])) != null
+                    && eMap.get(CAMERA_MOMENT_TAG_NAMES[i]) != null) {
+                present++;
+            }
+        }
+        log("camera makernote target=" + className + " mapD=" + dMap.size()
+                + " mapE=" + eMap.size() + " entries added=" + added
+                + " momentKeysPresent=" + present + "/"
+                + CAMERA_MOMENT_TAG_IDS.length);
+        if (present < CAMERA_MOMENT_TAG_IDS.length) {
+            log("camera makernote: " + className
+                    + " rejected (post-injection key verification failed)");
+            return false;
+        }
+        if (added > 0) {
+            log("camera makernote map extended: +5 Moment tags (" + label
+                    + "=" + className + ")");
+        } else {
+            log("camera makernote map already contains Moment tags (" + label
+                    + "=" + className + ")");
         }
         return true;
     }
@@ -607,6 +643,147 @@ public class HookEntry implements IXposedHookLoadPackage {
                     ModuleConfig.METHOD_SET_CAMERA_MAKERNOTE_TARGET, null, extras);
         } catch (Throwable t) {
             log("camera_makernote report failed: " + t);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // (1a.6) Camera CaptureRequest vendor-param trace (v2.7.5)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Hooks CaptureRequest.Builder.set(Key,Object) in the camera process and logs
+     * vendor keys whose name contains "legend" or "sessionparams" (e.g.
+     * com.xiaomi.sessionparams.legendMode). Read-only: never modifies values.
+     * Once per distinct key name per process (cap 40), byte[] as hex+length.
+     */
+    private static void hookCaptureParamTrace(XC_LoadPackage.LoadPackageParam lpparam) {
+        if (!traceCaptureParamsEnabled()) {
+            log("capture param trace disabled (trace_capture_params=off)");
+            return;
+        }
+        Class<?> builder;
+        try {
+            builder = XposedHelpers.findClass(CAPTURE_REQUEST_BUILDER_CLASS, lpparam.classLoader);
+        } catch (Throwable t) {
+            log("capture_param: class " + CAPTURE_REQUEST_BUILDER_CLASS + " not present (skip)");
+            return;
+        }
+        int hooked = 0;
+        Method[] methods = builder.getDeclaredMethods();
+        for (int i = 0; i < methods.length; i++) {
+            final Method m = methods[i];
+            try {
+                if (!m.getName().equals("set")) {
+                    continue;
+                }
+                if (m.getParameterTypes().length != 2) {
+                    continue;
+                }
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            if (!traceCaptureParamsEnabled()) {
+                                return;
+                            }
+                            Object key = param.args != null && param.args.length > 0
+                                    ? param.args[0] : null;
+                            Object value = param.args != null && param.args.length > 1
+                                    ? param.args[1] : null;
+                            String name = captureKeyName(key);
+                            if (name == null || name.isEmpty()) {
+                                return;
+                            }
+                            String lower = name.toLowerCase(Locale.US);
+                            if (!lower.contains("legend") && !lower.contains("sessionparams")) {
+                                return;
+                            }
+                            synchronized (sLoggedCaptureParams) {
+                                if (sLoggedCaptureParams.size() >= 40
+                                        || sLoggedCaptureParams.contains(name)) {
+                                    return;
+                                }
+                                sLoggedCaptureParams.add(name);
+                            }
+                            String repr = captureValueRepr(value);
+                            if (lower.contains("legend")) {
+                                dualLog("capture_param legendMode candidate: " + name + "=" + repr);
+                            } else {
+                                dualLog("capture_param " + name + "=" + repr);
+                            }
+                        } catch (Throwable t) {
+                            if (!sCaptureParamWarned) {
+                                sCaptureParamWarned = true;
+                                logcatWarn("capture_param hook body failed (fail-safe)", t);
+                            }
+                        }
+                    }
+                });
+                hooked++;
+            } catch (Throwable t) {
+                log("capture_param hook failed: " + t);
+            }
+        }
+        log(hooked > 0
+                ? "capture param trace installed: " + CAPTURE_REQUEST_BUILDER_CLASS + ".set"
+                : "WARN: CaptureRequest$Builder.set(Key,Object) not found");
+    }
+
+    private static boolean traceCaptureParamsEnabled() {
+        try {
+            return config().getBoolean("trace_capture_params",
+                    ModuleConfig.DEFAULT_TRACE_CAPTURE_PARAMS);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private static String captureKeyName(Object key) {
+        if (key == null) {
+            return null;
+        }
+        try {
+            Method getName = key.getClass().getMethod("getName");
+            Object n = getName.invoke(key);
+            if (n instanceof String && !((String) n).isEmpty()) {
+                return (String) n;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            return String.valueOf(key);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static String captureValueRepr(Object value) {
+        try {
+            if (value == null) {
+                return "null";
+            }
+            if (value instanceof byte[]) {
+                byte[] bytes = (byte[]) value;
+                char[] hex = "0123456789abcdef".toCharArray();
+                int n = Math.min(bytes.length, 32);
+                StringBuilder sb = new StringBuilder("byte[" + bytes.length + "]:");
+                for (int i = 0; i < n; i++) {
+                    int v = bytes[i] & 0xff;
+                    sb.append(hex[v >>> 4]).append(hex[v & 0x0f]);
+                }
+                if (bytes.length > n) {
+                    sb.append("...");
+                }
+                String s = sb.toString();
+                return s.length() > 120 ? s.substring(0, 120) : s;
+            }
+            String s = String.valueOf(value);
+            if (s.length() > 120) {
+                s = s.substring(0, 120) + "\u2026";
+            }
+            return s;
+        } catch (Throwable t) {
+            return "<unrepr>";
         }
     }
 
