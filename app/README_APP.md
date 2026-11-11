@@ -10,9 +10,9 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.6.2.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 20 / versionName 2.6.2，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.6.1）已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.7.0.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 21 / versionName 2.7.0，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.6.2）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
    v2.4.0 重点：**彻底移除系统账号 Cookie 路径**（不读取/不捕获/不保存系统账号 STS Cookie）；
    Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）。
@@ -54,6 +54,13 @@
    Retrofit `HttpException`（`l21.j`，`http_error code=… msg=…`），并记录
    `create_params final: oaid/aperture/focusX/focusY/deviceName/deviceType/androidIdLen`。
    即使 UI「云端报文捕获/云端轨迹」为空，也能用 logcat 看到真实报文；收集命令见第 7 节「日志排障」。
+   v2.7.0 新增 **CN 云端点重定向（A/B 实验，默认开启）**：v2.6.2 logcat 抓到国际端点 create 返回
+   `code=20090002` + MySQL `Table 'ai_platform.ai_billing_record' doesn't exist` —— 国际后端
+   legendV2/create 本身故障（计费表缺失），客户端链路全部正常。本版 hook 云端基址提供者
+   （GLOBAL `jq.d.a` / CN `nm.c.a`），把包含 `intl.miui.com` 的返回值重写为
+   **`https://api.open.ai.xiaomi.com`**（CN 端点），使 create/upload 走 CN 后端；日志
+   `cloud endpoint rewritten: <旧> -> https://api.open.ai.xiaomi.com`，诊断显示
+   `cloud_endpoint=…`。可在 ④ 功能开关关闭（`force_cn_cloud_endpoint`）做 A/B 对照。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -287,6 +294,14 @@ HyperOS 4 引入了大量 Rust 组件：
     （路径仅匹配 aiPhotoCloud / legend / hardwareAuth / hardwareNonce / auth/v1 / billing），
     **绝不记录查询参数、签名、Cookie 值、请求头值或请求体**。使用方式：先打开相册编辑并触发一次
     「二次增强」，再刷新轨迹/复制诊断，即可在真机看到 App 实际请求的云地址与 HTTP 码。
+- **CN 云端点重定向（v2.7.0，A/B 实验，默认开启）**：国际端点（`*.intl.miui.com`）的
+  legendV2/create 后端故障（计费表缺失），模块把云端基址重写为 CN
+  `https://api.open.ai.xiaomi.com`，让 create/upload 走 CN 后端。**A/B 对比**：④ 功能开关
+  开启 `force_cn_cloud_endpoint` = 使用 CN 端点（默认）；关闭 = 使用国际端点。每次请求后可在
+  ④/「复制诊断信息」查看 `cloud_endpoint=` 实际生效地址，logcat 看
+  `cloud endpoint rewritten: …` 与 `cloud_resp_body=`/`resp_entity`/`http_error`。
+  若 CN 端点返回区域/账号类错误（如 region mismatch / 无权益），将 `resp_entity code=… msg=…`
+  或 `cloud_resp_body=` 发回分析（这属于服务端策略，客户端无法绕过）。
 - **日志排障（v2.6.2）**：若「云端报文捕获/云端轨迹」仍显示暂无，用 adb 抓 logcat：
   `su -c "logcat -d | grep -E 'LeicaMoment|LSPosed-Bridge' | tail -60"`
   重点看 `create_params final:` / `legend_create_body=` / `cloud_resp_body=` / `resp_entity code=` /
@@ -377,6 +392,7 @@ HyperOS 4 引入了大量 Rust 组件：
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
 | 拍摄的一瞬照片没有 Moment 元数据（媒体编辑器仍报 legendInfo null / 图片解析失败） | v2.6.0 默认启用 CN/Global 相机 MakerNote 标签同步；请确认 ④ 开关 `sync_cn_camera_makernote` 开启、诊断显示 `camera_makernote=GLOBAL`（或 CN），并**强制停止相机/重启**使相机进程重新加载模块；再用相机拍一张正常亮度、未编辑的徕卡一瞬照片测试。 |
+| 想确认云请求到底发往哪个端点 | v2.7.0 起在 ④/「复制诊断信息」查看 `cloud_endpoint=`；logcat 看 `cloud endpoint rewrite target class=…` 与 `cloud endpoint rewritten: <旧> -> https://api.open.ai.xiaomi.com`。开启 `force_cn_cloud_endpoint`（默认）= CN 端点，关闭 = 国际端点（A/B 对照）。 |
 | 云端 create 返回 HTTP 400 / errorCode 20090002 | v2.6.2 起每个捕获点都会同时写 logcat：`su -c "logcat -d | grep -E 'LeicaMoment|LSPosed-Bridge' | tail -60"`，重点看 `legend_create_body=`（实际发送 JSON）、`cloud_resp_body=`、`resp_entity code=... msg=...`、`http_error code=... msg=...`。UI 的「云端报文捕获（最近8条）」/「复制诊断信息」也显示脱敏后的内容；若 UI 为空而 logcat 有内容，说明 provider 写入被拦（不影响抓报文）。常见原因：oaid 伪值不被接受、focus/aperture 取值范围或 imgUrl 参数不匹配。 |
 | 云端 create 返回 HTTP 400 / errorCode 439 | v2.5.3 已默认补全 CreateLegendV2TaskParams 的 aperture/focusX/focusY/oaid，请确认 ④ 功能开关 `force_legend_cloud_params` 开启，并在「刷新云端轨迹」/复制诊断中查看追加的 `body=` 片段；若仍 400，把该片段发回分析（含 errorCode/errorMsg，无令牌/请求头值）。 |
 | 「图片解析失败」（legendInfo is null） | v2.5.2 起 CN/GLOBAL 均支持 legend 版本回落注入（`legend_fallback_target` 显示命中变体，none 表示未匹配）；若仍失败请确认 ④ 功能开关中 `force_legend_fallback` 为开启，并查看「刷新云端轨迹」中的请求与 HTTP 码。原 v2.5.1 说明：，无一瞬 maker note 的照片会走 cleaned upload 兜底并尝试云端请求；若仍失败请确认 ④ 功能开关中 `force_legend_fallback` 为开启，并查看「刷新云端轨迹」中的请求与 HTTP 码。 |
