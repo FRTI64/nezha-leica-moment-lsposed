@@ -160,6 +160,7 @@ public class MainActivity extends Activity {
     private LinearLayout probeResults;
     private TextView probeAggregate;
     private TextView cloudTraceView;
+    private TextView cloudCaptureView;
     private TextView forceLaunchStatus;
     private String lastPickedUri = "";
     private String lastLaunchComponent = "";
@@ -195,6 +196,7 @@ public class MainActivity extends Activity {
             updateStatusPill();
             updateProbeUiState();
             loadCloudTrace();
+            loadCloudCapture();
         } catch (Throwable t) {
             Log.e(TAG, "onCreate failed", t);
             setActionStatus("\u754c\u9762\u521d\u59cb\u5316\u5931\u8d25\uff1a" + t);
@@ -210,6 +212,7 @@ public class MainActivity extends Activity {
             updateStatusPill();
             updateProbeUiState();
             loadCloudTrace();
+            loadCloudCapture();
         } catch (Throwable ignored) {
         }
     }
@@ -707,6 +710,35 @@ public class MainActivity extends Activity {
                 + "\u4e14 host \u5c5e\u4e8e xiaomi/mi.com \u7684\u4e91\u8bf7\u6c42\u3002", 11, colorTextDim, false);
         traceHint.setPadding(0, dp(6), 0, 0);
         body.addView(traceHint);
+
+        TextView captureLabel = text("\u4e91\u7aef\u62a5\u6587\u6355\u83b7\uff08\u6700\u8fd18\u6761\uff09", 13, colorText, true);
+        captureLabel.setPadding(0, dp(12), 0, dp(4));
+        body.addView(captureLabel);
+
+        cloudCaptureView = text("\uff08\u6682\u65e0\u62a5\u6587\u3002\u5148\u89e6\u53d1\u4e00\u6b21\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\uff0c\u518d\u5237\u65b0\u3002\uff09",
+                11, colorTextDim, false);
+        cloudCaptureView.setTextIsSelectable(true);
+        cloudCaptureView.setTypeface(Typeface.MONOSPACE);
+        cloudCaptureView.setPadding(dp(8), dp(8), dp(8), dp(8));
+        cloudCaptureView.setBackground(roundBg(colorFieldBg, dp(8), colorBorder));
+        body.addView(cloudCaptureView);
+
+        Button refreshCapture = actionButton("\u5237\u65b0\u4e91\u7aef\u62a5\u6587", "\u5237\u65b0\u4e91\u7aef\u62a5\u6587\u6355\u83b7",
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        loadCloudCapture();
+                    }
+                });
+        LinearLayout.LayoutParams rclp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rclp.topMargin = dp(6);
+        body.addView(refreshCapture, rclp);
+
+        TextView captureNote = text("\u4ec5\u8bb0\u5f55 create \u8bf7\u6c42\u4f53\u4e0e\u670d\u52a1\u7aef\u54cd\u5e94\u4f53\uff0c"
+                + "\u672c\u5730\u4fdd\u5b58\uff08\u6700\u540e8\u6761\uff09\uff0c\u4e0d\u4e0a\u4f20\u3002", 11, colorTextDim, false);
+        captureNote.setPadding(0, dp(4), 0, 0);
+        body.addView(captureNote);
 
         TextView note = text("\u63a2\u6d4b\u7aef\u70b9\u4e3a\u53ea\u8bfb\u63a2\u6d4b\uff0c\u53ef\u80fd\u968f\u670d\u52a1\u7aef\u8c03\u6574\uff1b"
                 + "\u4e0d\u4f1a\u4e0a\u4f20/\u8bb0\u5f55 Cookie \u4e2d\u7684\u4ee4\u724c\u503c\u3002", 11, colorTextDim, false);
@@ -2011,6 +2043,29 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void loadCloudCapture() {
+        String capture = readCloudCaptureString();
+        if (cloudCaptureView != null) {
+            if (capture.isEmpty()) {
+                cloudCaptureView.setText("\uff08\u6682\u65e0\u62a5\u6587\u3002\u5148\u89e6\u53d1\u4e00\u6b21\u300c\u4e8c\u6b21\u589e\u5f3a\u300d\uff0c"
+                        + "\u518d\u70b9\u300c\u5237\u65b0\u4e91\u7aef\u62a5\u6587\u300d\u3002\uff09");
+            } else {
+                cloudCaptureView.setText(capture);
+            }
+        }
+    }
+
+    private String readCloudCaptureString() {
+        try {
+            Bundle cfg = getContentResolver().call(ModuleConfig.providerUri(),
+                    ModuleConfig.METHOD_GET_CONFIG, null, null);
+            String capture = cfg == null ? "" : cfg.getString("cloud_capture");
+            return capture == null ? "" : capture;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
     // ------------------------------------------------------------------
     // Diagnostics (no token values)
     // ------------------------------------------------------------------
@@ -2093,6 +2148,16 @@ public class MainActivity extends Activity {
             String[] lines = cloudTrace.split("\n");
             for (int i = 0; i < lines.length; i++) {
                 sb.append(" - ").append(lines[i]).append('\n');
+            }
+        }
+        String cloudCapture = readCloudCaptureString();
+        sb.append("Cloud payload capture (last 8; create request/response bodies, local only):\n");
+        if (cloudCapture.isEmpty()) {
+            sb.append(" - (none yet; trigger 二次增强 first)\n");
+        } else {
+            String[] capLines = cloudCapture.split("\n");
+            for (int i = 0; i < capLines.length; i++) {
+                sb.append(" - ").append(capLines[i]).append('\n');
             }
         }
         sb.append("Note: no token values included; only key names/lengths, HTTP codes, URL paths and selftest status.\n");
