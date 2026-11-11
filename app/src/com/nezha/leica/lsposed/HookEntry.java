@@ -214,6 +214,12 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static final String CLOUD_RESPONSE_BODY_CLASS = "b11.f0";
     private static volatile boolean sCloudCaptureWarned;
 
+    /** v2.6.2: logcat-visible diagnostics tag (also used by Log.i/Log.w). */
+    private static final String LOGCAT_TAG = "LeicaMoment";
+    private static final String AI_AVATAR_RESP_ENTITY_CLASS =
+            "com.miui.mediaeditor.aigc.cloud.internal.aiavatarv2.api.entity.AiAvatarV2ResponseEntity";
+    private static final String RETROFIT_HTTP_EXCEPTION_CLASS = "l21.j";
+
     private static volatile Constructor<?> sLegendCtor;
     private static volatile Object sLegendV2;
     private static volatile Object sLegendM3;
@@ -269,6 +275,8 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookLegendCloudParams(lpparam);
             hookLegendCreateBodyCapture(lpparam);
             hookCloudResponseBodyCapture(lpparam);
+            hookAiAvatarResponseEntity(lpparam);
+            hookRetrofitHttpException(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
             log("FATAL hook installation error: " + t);
@@ -278,6 +286,22 @@ public class HookEntry implements IXposedHookLoadPackage {
     // ---------------------------------------------------------------------
     // Logging
     // ---------------------------------------------------------------------
+
+    /** Dual logging: LSPosed bridge log + logcat (tag LeicaMoment). */
+    private static void dualLog(String msg) {
+        log(msg);
+        try {
+            android.util.Log.i(LOGCAT_TAG, msg);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void logcatWarn(String msg, Throwable t) {
+        try {
+            android.util.Log.w(LOGCAT_TAG, msg + (t == null ? "" : (": " + t)));
+        } catch (Throwable ignored) {
+        }
+    }
 
     private static void log(String msg) {
         try {
@@ -1294,6 +1318,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                                 return;
                             }
                             fillLegendCloudParams(param.thisObject);
+                            logCreateParamsFinal(param.thisObject);
                         } catch (Throwable t) {
                             if (!sLegendCloudParamsWarned) {
                                 sLegendCloudParamsWarned = true;
@@ -1492,7 +1517,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                             if (json.isEmpty()) {
                                 return;
                             }
-                            log("legend_create_body=" + json);
+                            dualLog("legend_create_body=" + json);
                             storeCloudCapture("legend_create_body", json);
                         } catch (Throwable t) {
                             if (!sCloudCaptureWarned) {
@@ -1557,7 +1582,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                             if (snippet.isEmpty()) {
                                 return;
                             }
-                            log("cloud_resp_body=" + snippet);
+                            dualLog("cloud_resp_body=" + snippet);
                             storeCloudCapture("cloud_resp_body", snippet);
                         } catch (Throwable t) {
                             if (!sCloudCaptureWarned) {
@@ -1606,19 +1631,227 @@ public class HookEntry implements IXposedHookLoadPackage {
         try {
             Context ctx = appContext();
             if (ctx == null) {
+                logcatWarn("cloud_capture provider skipped (no app context) tag=" + tag, null);
                 return;
             }
             Bundle extras = new Bundle();
             extras.putString("tag", tag);
             extras.putString("text", text);
-            ctx.getContentResolver().call(ModuleConfig.providerUri(),
+            Bundle result = ctx.getContentResolver().call(ModuleConfig.providerUri(),
                     ModuleConfig.METHOD_APPEND_CLOUD_CAPTURE, null, extras);
+            boolean ok = result != null && result.getBoolean("ok", false);
+            dualLog("cloud_capture stored tag=" + tag + " ok=" + ok
+                    + " chars=" + (text == null ? 0 : text.length()));
+            if (!ok) {
+                logcatWarn("cloud_capture provider returned !ok tag=" + tag, null);
+            }
         } catch (Throwable t) {
+            logcatWarn("cloud_capture provider call failed tag=" + tag, t);
             if (!sCloudCaptureWarned) {
                 sCloudCaptureWarned = true;
                 log("cloud capture persist failed (fail-safe): " + t);
             }
         }
+    }
+
+    /** Logs CreateLegendV2TaskParams final field values (no full androidId). */
+    private static void logCreateParamsFinal(Object params) {
+        if (params == null) {
+            return;
+        }
+        try {
+            String oaid = "";
+            try {
+                Object v = XposedHelpers.getObjectField(params, "oaid");
+                oaid = v == null ? "" : String.valueOf(v);
+            } catch (Throwable ignored) {
+            }
+            Object aperture = null;
+            Object focusX = null;
+            Object focusY = null;
+            Object deviceName = null;
+            Object deviceType = null;
+            int androidIdLen = -1;
+            try {
+                aperture = XposedHelpers.getObjectField(params, "aperture");
+            } catch (Throwable ignored) {
+            }
+            try {
+                focusX = XposedHelpers.getObjectField(params, "focusX");
+            } catch (Throwable ignored) {
+            }
+            try {
+                focusY = XposedHelpers.getObjectField(params, "focusY");
+            } catch (Throwable ignored) {
+            }
+            try {
+                deviceName = XposedHelpers.getObjectField(params, "deviceName");
+            } catch (Throwable ignored) {
+            }
+            try {
+                deviceType = XposedHelpers.getObjectField(params, "deviceType");
+            } catch (Throwable ignored) {
+            }
+            try {
+                Object androidId = XposedHelpers.getObjectField(params, "androidId");
+                androidIdLen = androidId == null ? 0 : String.valueOf(androidId).length();
+            } catch (Throwable ignored) {
+            }
+            String oaidPrefix = oaid.length() > 8 ? oaid.substring(0, 8) + "\u2026" : oaid;
+            dualLog("create_params final: oaid=" + oaidPrefix + "(len=" + oaid.length()
+                    + "), aperture=" + aperture + ", focusX=" + focusX
+                    + ", focusY=" + focusY + ", deviceName=" + deviceName
+                    + ", deviceType=" + deviceType + ", androidIdLen=" + androidIdLen);
+        } catch (Throwable t) {
+            logcatWarn("create_params final log failed", t);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // (1h) Direct response/entity hooks (v2.6.2, logcat-visible)
+    // ---------------------------------------------------------------------
+
+    /** Captures parsed AiAvatarV2 response entity (code/message/traceId). */
+    private static void hookAiAvatarResponseEntity(XC_LoadPackage.LoadPackageParam lpparam) {
+        Class<?> cls;
+        try {
+            cls = XposedHelpers.findClass(AI_AVATAR_RESP_ENTITY_CLASS, lpparam.classLoader);
+        } catch (Throwable t) {
+            log("resp_entity: class " + AI_AVATAR_RESP_ENTITY_CLASS + " not present (skip)");
+            return;
+        }
+        Constructor<?>[] ctors = cls.getDeclaredConstructors();
+        int hooked = 0;
+        for (int i = 0; i < ctors.length; i++) {
+            final Constructor<?> c = ctors[i];
+            Class<?>[] ps = c.getParameterTypes();
+            if (ps.length != 4) {
+                continue;
+            }
+            if (ps[0] != int.class && ps[0] != Integer.class) {
+                continue;
+            }
+            if (ps[1] != String.class || ps[3] != String.class) {
+                continue;
+            }
+            try {
+                c.setAccessible(true);
+                XposedBridge.hookMethod(c, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object[] args = param.args;
+                            Object code = args != null && args.length > 0 ? args[0] : null;
+                            Object msg = args != null && args.length > 1 ? args[1] : null;
+                            Object trace = args != null && args.length > 3 ? args[3] : null;
+                            String msgText = msg == null ? "" : String.valueOf(msg);
+                            if (msgText.length() > 200) {
+                                msgText = msgText.substring(0, 200) + "\u2026";
+                            }
+                            String traceText = trace == null ? "" : String.valueOf(trace);
+                            if (traceText.length() > 120) {
+                                traceText = traceText.substring(0, 120) + "\u2026";
+                            }
+                            dualLog("resp_entity code=" + code + " msg=" + msgText
+                                    + " trace=" + traceText);
+                            storeCloudCapture("resp_entity", "code=" + code + " msg=" + msgText
+                                    + " trace=" + traceText);
+                        } catch (Throwable t) {
+                            logcatWarn("resp_entity hook body failed", t);
+                        }
+                    }
+                });
+                hooked++;
+            } catch (Throwable t) {
+                log("resp_entity ctor hook failed: " + t);
+            }
+        }
+        log(hooked > 0
+                ? "resp_entity hook installed: " + cls.getName()
+                : "WARN: AiAvatarV2ResponseEntity (int,String,Object,String) ctor not found");
+    }
+
+    /** Captures Retrofit HttpException (code/message) from l21.j. */
+    private static void hookRetrofitHttpException(XC_LoadPackage.LoadPackageParam lpparam) {
+        Class<?> cls;
+        try {
+            cls = XposedHelpers.findClass(RETROFIT_HTTP_EXCEPTION_CLASS, lpparam.classLoader);
+        } catch (Throwable t) {
+            log("http_error: class " + RETROFIT_HTTP_EXCEPTION_CLASS + " not present (skip)");
+            return;
+        }
+        Constructor<?>[] ctors = cls.getDeclaredConstructors();
+        int hooked = 0;
+        for (int i = 0; i < ctors.length; i++) {
+            final Constructor<?> c = ctors[i];
+            Class<?>[] ps = c.getParameterTypes();
+            if (ps.length != 1) {
+                continue;
+            }
+            try {
+                c.setAccessible(true);
+                XposedBridge.hookMethod(c, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object response = param.args != null && param.args.length > 0
+                                    ? param.args[0] : null;
+                            int code = extractHttpCode(response);
+                            String msg = extractMessageString(response, 200);
+                            dualLog("http_error code=" + code + " msg=" + msg);
+                            storeCloudCapture("http_error", "code=" + code + " msg=" + msg);
+                        } catch (Throwable t) {
+                            logcatWarn("http_error hook body failed", t);
+                        }
+                    }
+                });
+                hooked++;
+            } catch (Throwable t) {
+                log("http_error ctor hook failed: " + t);
+            }
+        }
+        log(hooked > 0
+                ? "http_error hook installed: " + cls.getName()
+                : "WARN: l21.j single-arg ctor not found");
+    }
+
+    /** Picks a String-returning zero-arg getter value (prefers name containing message). */
+    private static String extractMessageString(Object obj, int maxChars) {
+        if (obj == null) {
+            return "";
+        }
+        String best = "";
+        try {
+            Method[] methods = obj.getClass().getMethods();
+            for (int i = 0; i < methods.length; i++) {
+                Method m = methods[i];
+                if (m.getParameterTypes().length != 0
+                        || m.getDeclaringClass() == Object.class
+                        || m.getReturnType() != String.class) {
+                    continue;
+                }
+                try {
+                    Object r = m.invoke(obj);
+                    if (!(r instanceof String)) {
+                        continue;
+                    }
+                    String s = (String) r;
+                    if (m.getName().toLowerCase(Locale.US).contains("message") && !s.isEmpty()) {
+                        best = s;
+                        break;
+                    }
+                    if (best.isEmpty() && !s.isEmpty() && s.length() < 300) {
+                        best = s;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (best.length() > maxChars) {
+            best = best.substring(0, maxChars) + "\u2026";
+        }
+        return best;
     }
 
     // ---------------------------------------------------------------------
