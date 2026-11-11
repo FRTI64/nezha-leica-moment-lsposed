@@ -158,20 +158,42 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static final ArrayDeque<String> sCloudTrace = new ArrayDeque<String>();
     private static volatile String sCloudTraceJoined = "";
 
-    /** v2.5.1 option B: legend version fallback injection targets/descriptors. */
-    private static final String LEGEND_RESOLVER_CLASS = "lv.j0";
-    private static final String LEGEND_RESULT_CLASS_NAME = "lv.d0";
-    private static final String LEGEND_RESULT_CLASS = "Llv/d0;";
-    private static final String LEGEND_V2_CLASS = "lv.i0";
+    /**
+     * v2.5.2 option B: legend version fallback injection variants.
+     * {label, resolverClass, versionDataClass, versionEnumClass}.
+     * CN mediaeditor 2.10.43: lv.j0 -> lv.d0, version enum lv.i0 (b=V2).
+     * GLOBAL mediaeditor 2.10.40: hz.q0 -> hz.k0, version enum hz.p0 (b=V2).
+     */
+    private static final String[][] LEGEND_VARIANTS = new String[][]{
+            {"CN", "lv.j0", "lv.d0", "lv.i0"},
+            {"GLOBAL", "hz.q0", "hz.k0", "hz.p0"}
+    };
     private static final String LEGEND_INFO_CLASS = "com.miui.mediaeditor.legendary.e";
+    /** CN descriptor kept for logging/compat (GLOBAL counterpart is Lhz/k0;). */
+    private static final String LEGEND_RESULT_CLASS = "Llv/d0;";
+
+    /** Maker-note map-level safety net: {mapClass, label}; getter is a(String). */
+    private static final String[][] LEGEND_MAKER_NOTE_TARGETS = new String[][]{
+            {"pc.g", "CN"},
+            {"mg.g", "GLOBAL"}
+    };
+    private static final String[] LEGEND_MAKER_NOTE_KEYS = new String[]{
+            "MomentVersion", "MomentType", "MomentSubMode", "MomentPro",
+            "MomentBokehDepthVersion", "depthMapVersion"
+    };
+    private static final String[] LEGEND_MAKER_NOTE_VALUES = new String[]{
+            "2", "9", "2", "1", "4", "4"
+    };
 
     private static volatile Constructor<?> sLegendCtor;
     private static volatile Object sLegendV2;
     private static volatile Object sLegendM3;
     private static volatile Object sLegendF;
+    private static volatile String sLegendCacheVariant = "";
     private static volatile boolean sLegendReady;
     private static volatile boolean sLegendWarned;
     private static volatile boolean sLegendLogged;
+    private static volatile boolean sMakerNoteLogged;
 
     private static volatile Bundle sConfig;
     private static volatile long sConfigTs;
@@ -213,6 +235,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookCloudTrace(lpparam);
             hookAccountProbe(lpparam);
             hookLegendFallback(lpparam);
+            hookMakerNoteFallback(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
             log("FATAL hook installation error: " + t);
@@ -730,78 +753,104 @@ public class HookEntry implements IXposedHookLoadPackage {
     }
 
     // ---------------------------------------------------------------------
-    // (1d) Legend version fallback injection (v2.5.1 option B, default on)
+    // (1d) Legend version fallback injection (v2.5.2: CN + GLOBAL variants)
     // ---------------------------------------------------------------------
 
     /**
-     * Hooks the mediaeditor LegendaryVersionResolver factory so decodeImage takes
-     * the V2/M3 built-in fallback path even when the photo has NO Xiaomi maker
-     * note: the result of {@code lv.j0.a(..)} / {@code lv.j0.b(..)} is replaced by
-     * a crafted {@code lv.d0(lv.i0.b (V2), legendary.e.c (M3), Boolean.TRUE, legendary.e.f)} instance. Fully fail-safe: any missing class/field/method is
-     * logged and skipped, never crashing the app.
+     * Hooks the mediaeditor LegendaryVersionResolver factory (CN lv.j0 / GLOBAL
+     * hz.q0) so decodeImage takes the built-in V2/M3 fallback path even when the
+     * photo has NO Xiaomi maker note. Result is replaced by a crafted version-data
+     * object: (version enum b = V2, legendary.e.c = M3, Boolean.TRUE, legendary.e.f).
+     * Fully fail-safe: missing classes/fields/constructors are logged and skipped.
      */
     private static void hookLegendFallback(XC_LoadPackage.LoadPackageParam lpparam) {
-        Class<?> resolver;
-        try {
-            resolver = XposedHelpers.findClass(LEGEND_RESOLVER_CLASS, lpparam.classLoader);
-        } catch (Throwable t) {
-            log("legend fallback: class " + LEGEND_RESOLVER_CLASS
-                    + " not present on this version (skip)");
-            return;
-        }
-        int installed = 0;
-        Method[] methods = resolver.getDeclaredMethods();
-        for (int i = 0; i < methods.length; i++) {
-            final Method m = methods[i];
+        for (int v = 0; v < LEGEND_VARIANTS.length; v++) {
+            final int variantIndex = v;
+            final String label = LEGEND_VARIANTS[v][0];
+            final String resolverName = LEGEND_VARIANTS[v][1];
+            final String resultName = LEGEND_VARIANTS[v][2];
+            Class<?> resolver;
             try {
-                if (!Modifier.isStatic(m.getModifiers())) {
-                    continue;
-                }
-                final String methodName = m.getName();
-                Class<?>[] ps = m.getParameterTypes();
-                boolean isA = methodName.equals("a") && ps.length == 1;
-                boolean isB = methodName.equals("b") && ps.length == 2
-                        && ps[0] == String.class;
-                if (!isA && !isB) {
-                    continue;
-                }
-                if (!m.getReturnType().getName().equals(LEGEND_RESULT_CLASS_NAME)) {
-                    continue;
-                }
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        try {
-                            if (!legendFallbackEnabled()) {
-                                return;
-                            }
-                            Object crafted = buildLegendFallback(lpparam.classLoader);
-                            if (crafted != null) {
-                                param.setResult(crafted);
-                                if (!sLegendLogged) {
-                                    sLegendLogged = true;
-                                    log("legend fallback injected: " + LEGEND_RESOLVER_CLASS
-                                            + "." + methodName + " -> " + LEGEND_RESULT_CLASS
-                                            + " (V2/M3/TRUE/f; cleaned upload fallback path enabled)");
+                resolver = XposedHelpers.findClass(resolverName, lpparam.classLoader);
+            } catch (Throwable t) {
+                log("legend fallback: " + label + " resolver class " + resolverName
+                        + " not present on this app version (skip)");
+                continue;
+            }
+            int installed = 0;
+            Method[] methods = resolver.getDeclaredMethods();
+            for (int i = 0; i < methods.length; i++) {
+                final Method m = methods[i];
+                try {
+                    if (!Modifier.isStatic(m.getModifiers())) {
+                        continue;
+                    }
+                    final String methodName = m.getName();
+                    Class<?>[] ps = m.getParameterTypes();
+                    boolean isA = methodName.equals("a") && ps.length == 1;
+                    boolean isB = methodName.equals("b") && ps.length == 2
+                            && ps[0] == String.class;
+                    if (!isA && !isB) {
+                        continue;
+                    }
+                    if (!m.getReturnType().getName().equals(resultName)) {
+                        continue;
+                    }
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                if (!legendFallbackEnabled()) {
+                                    return;
+                                }
+                                Object crafted = buildLegendFallback(
+                                        lpparam.classLoader, variantIndex);
+                                if (crafted != null) {
+                                    param.setResult(crafted);
+                                    if (!sLegendLogged) {
+                                        sLegendLogged = true;
+                                        log("legend fallback injected: " + resolverName + "."
+                                                + methodName + " -> " + resultName + " (" + label
+                                                + "; V2/M3/TRUE/f; cleaned upload fallback path enabled)");
+                                    }
+                                }
+                            } catch (Throwable t) {
+                                if (!sLegendWarned) {
+                                    sLegendWarned = true;
+                                    log("legend fallback injection failed (fail-safe skip): " + t);
                                 }
                             }
-                        } catch (Throwable t) {
-                            if (!sLegendWarned) {
-                                sLegendWarned = true;
-                                log("legend fallback injection failed (fail-safe skip): " + t);
-                            }
                         }
-                    }
-                });
-                installed++;
-                log("legend fallback hook installed: " + LEGEND_RESOLVER_CLASS + "."
-                        + methodName + " -> " + LEGEND_RESULT_CLASS);
-            } catch (Throwable t) {
-                log("legend fallback hookMethod failed: " + m.getName() + " -> " + t);
+                    });
+                    installed++;
+                } catch (Throwable t) {
+                    log("legend fallback hookMethod failed: " + m.getName() + " -> " + t);
+                }
+            }
+            if (installed > 0) {
+                log("legend fallback hook installed: " + resolverName + " (" + label + ")");
+                reportLegendFallbackTarget(label);
+                return;
             }
         }
-        if (installed == 0) {
-            log("WARN: no legend fallback target hooked (lv.j0.a/b shape differs on this version)");
+        reportLegendFallbackTarget("none");
+        log("WARN: no legend fallback resolver matched (expected " + LEGEND_RESULT_CLASS
+                + " on CN / Lhz/k0; on GLOBAL; force_legend_fallback remains enabled but inert)");
+    }
+
+    private static void reportLegendFallbackTarget(String target) {
+        log("legend_fallback_target=" + target);
+        try {
+            Context ctx = appContext();
+            if (ctx == null) {
+                return;
+            }
+            Bundle extras = new Bundle();
+            extras.putString("target", target);
+            ctx.getContentResolver().call(ModuleConfig.providerUri(),
+                    ModuleConfig.METHOD_SET_LEGEND_FALLBACK_TARGET, null, extras);
+        } catch (Throwable t) {
+            log("legend_fallback_target report failed: " + t);
         }
     }
 
@@ -814,41 +863,49 @@ public class HookEntry implements IXposedHookLoadPackage {
         }
     }
 
-    private static Object buildLegendFallback(ClassLoader loader) throws Throwable {
-        if (sLegendReady && sLegendCtor != null) {
+    private static Object buildLegendFallback(ClassLoader loader, int variantIndex) throws Throwable {
+        String label = LEGEND_VARIANTS[variantIndex][0];
+        String resultName = LEGEND_VARIANTS[variantIndex][2];
+        String versionEnumName = LEGEND_VARIANTS[variantIndex][3];
+        if (sLegendReady && label.equals(sLegendCacheVariant) && sLegendCtor != null) {
             return sLegendCtor.newInstance(sLegendV2, sLegendM3, Boolean.TRUE, sLegendF);
         }
         synchronized (HookEntry.class) {
-            if (sLegendReady && sLegendCtor != null) {
+            if (sLegendReady && label.equals(sLegendCacheVariant) && sLegendCtor != null) {
                 return sLegendCtor.newInstance(sLegendV2, sLegendM3, Boolean.TRUE, sLegendF);
             }
-            Class<?> d0 = XposedHelpers.findClass(LEGEND_RESULT_CLASS_NAME, loader);
-            Class<?> i0 = XposedHelpers.findClass(LEGEND_V2_CLASS, loader);
+            Class<?> dataClass = XposedHelpers.findClass(resultName, loader);
+            Class<?> versionEnum = XposedHelpers.findClass(versionEnumName, loader);
             Class<?> info = XposedHelpers.findClass(LEGEND_INFO_CLASS, loader);
-            Object v2 = XposedHelpers.getStaticObjectField(i0, "b"); // lv.i0.b = V2
-            Object m3 = XposedHelpers.getStaticObjectField(info, "c"); // legendary.e.c = M3
+            Object v2 = XposedHelpers.getStaticObjectField(versionEnum, "b"); // b = V2
+            Object m3 = XposedHelpers.getStaticObjectField(info, "c"); // c = M3
             Object f;
             try {
                 f = XposedHelpers.getStaticObjectField(info, "f");
             } catch (Throwable t) {
-                f = XposedHelpers.getStaticObjectField(info, "d"); // fallback constant
+                f = XposedHelpers.getStaticObjectField(info, "d");
             }
-            Constructor<?> ctor = findLegendConstructor(d0, i0, info);
+            Constructor<?> ctor = findLegendConstructor(dataClass, versionEnum, info);
             if (ctor == null) {
-                throw new NoSuchMethodException("lv.d0 has no (lv.i0, legendary.e, Boolean, legendary.e) constructor");
+                throw new NoSuchMethodException("no (" + versionEnumName
+                        + ", legendary.e, Boolean, legendary.e) constructor on " + resultName);
             }
             sLegendCtor = ctor;
             sLegendV2 = v2;
             sLegendM3 = m3;
             sLegendF = f;
+            sLegendCacheVariant = label;
             sLegendReady = true;
-            log("legend fallback: resolved lv.d0 constructor + V2/M3/f enums");
+            log("legend fallback: resolved " + resultName + " constructor + "
+                    + versionEnumName + ".b/legendary.e.c/f (" + label + ")");
             return ctor.newInstance(v2, m3, Boolean.TRUE, f);
         }
     }
 
-    private static Constructor<?> findLegendConstructor(Class<?> d0, Class<?> i0, Class<?> info) {
-        Constructor<?>[] ctors = d0.getDeclaredConstructors();
+    private static Constructor<?> findLegendConstructor(Class<?> dataClass,
+                                                        Class<?> versionEnum,
+                                                        Class<?> info) {
+        Constructor<?>[] ctors = dataClass.getDeclaredConstructors();
         for (int i = 0; i < ctors.length; i++) {
             Constructor<?> c = ctors[i];
             Class<?>[] ps = c.getParameterTypes();
@@ -858,7 +915,8 @@ public class HookEntry implements IXposedHookLoadPackage {
             if (!(ps[2] == boolean.class || ps[2] == Boolean.class)) {
                 continue;
             }
-            if (!acceptParam(ps[0], i0) || !acceptParam(ps[1], info) || !acceptParam(ps[3], info)) {
+            if (!acceptParam(ps[0], versionEnum) || !acceptParam(ps[1], info)
+                    || !acceptParam(ps[3], info)) {
                 continue;
             }
             try {
@@ -875,6 +933,97 @@ public class HookEntry implements IXposedHookLoadPackage {
             return false;
         }
         return param.equals(valueClass) || param.isAssignableFrom(valueClass);
+    }
+
+    // ---------------------------------------------------------------------
+    // (1e) Maker-note map safety net (CN pc.g / GLOBAL mg.g)
+    // ---------------------------------------------------------------------
+
+    private static void hookMakerNoteFallback(XC_LoadPackage.LoadPackageParam lpparam) {
+        int installed = 0;
+        for (int t = 0; t < LEGEND_MAKER_NOTE_TARGETS.length; t++) {
+            final String className = LEGEND_MAKER_NOTE_TARGETS[t][0];
+            final String label = LEGEND_MAKER_NOTE_TARGETS[t][1];
+            Class<?> mapClass;
+            try {
+                mapClass = XposedHelpers.findClass(className, lpparam.classLoader);
+            } catch (Throwable e) {
+                log("maker note fallback: " + label + " class " + className
+                        + " not present (skip)");
+                continue;
+            }
+            Method[] methods = mapClass.getDeclaredMethods();
+            for (int i = 0; i < methods.length; i++) {
+                final Method m = methods[i];
+                try {
+                    if (!m.getName().equals("a")) {
+                        continue;
+                    }
+                    Class<?>[] ps = m.getParameterTypes();
+                    if (ps.length != 1 || ps[0] != String.class) {
+                        continue;
+                    }
+                    if (m.getReturnType() == void.class) {
+                        continue;
+                    }
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                if (!legendFallbackEnabled()) {
+                                    return;
+                                }
+                                if (param.getResult() != null) {
+                                    return;
+                                }
+                                String key = param.args.length > 0
+                                        ? (String) param.args[0] : null;
+                                String synth = makerNoteFallbackValue(key);
+                                if (synth == null) {
+                                    return;
+                                }
+                                Class<?> rt = m.getReturnType();
+                                if (rt == String.class) {
+                                    param.setResult(synth);
+                                } else if (rt == int.class || rt == Integer.class) {
+                                    param.setResult(Integer.valueOf(synth));
+                                } else if (rt == long.class || rt == Long.class) {
+                                    param.setResult(Long.valueOf(synth));
+                                } else {
+                                    param.setResult(synth);
+                                }
+                                if (!sMakerNoteLogged) {
+                                    sMakerNoteLogged = true;
+                                    log("maker note fallback injected: " + key + "=" + synth
+                                            + " (" + label + ")");
+                                }
+                            } catch (Throwable e) {
+                                // fail-safe: never disturb maker-note parsing
+                            }
+                        }
+                    });
+                    installed++;
+                    log("maker note fallback installed: " + className + ".a(String) (" + label + ")");
+                } catch (Throwable e) {
+                    log("maker note fallback hookMethod failed: " + m.getName() + " -> " + e);
+                }
+            }
+        }
+        if (installed == 0) {
+            log("WARN: no maker note fallback map hooked (CN pc.g / GLOBAL mg.g absent)");
+        }
+    }
+
+    private static String makerNoteFallbackValue(String key) {
+        if (key == null) {
+            return null;
+        }
+        for (int i = 0; i < LEGEND_MAKER_NOTE_KEYS.length; i++) {
+            if (LEGEND_MAKER_NOTE_KEYS[i].equalsIgnoreCase(key)) {
+                return LEGEND_MAKER_NOTE_VALUES[i];
+            }
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------------
