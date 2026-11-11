@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "2.5.0";
+    public static final String MODULE_VERSION = "2.5.1";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
@@ -35,6 +35,9 @@ public final class ModuleConfig {
     public static final String KEY_COOKIE_SOURCES = "cookie_sources";
     public static final String KEY_COOKIE_DUP_KEYS = "cookie_dup_keys";
     public static final String KEY_FORCE_CTA = "force_cta";
+    /** v2.5.1 option B: inject legend version fallback (V2/M3) so no-maker-note
+     *  photos can take the cleaned-upload cloud fallback path. Default true. */
+    public static final String KEY_FORCE_LEGEND_FALLBACK = "force_legend_fallback";
     /** Newline-joined cloud request trace lines (no token values). */
     public static final String KEY_CLOUD_TRACE = "cloud_trace";
 
@@ -42,6 +45,7 @@ public final class ModuleConfig {
     public static final boolean DEFAULT_ENABLE_GATE_BYPASS = true;
     public static final boolean DEFAULT_ENABLE_COOKIE = true;
     public static final boolean DEFAULT_FORCE_CTA = false;
+    public static final boolean DEFAULT_FORCE_LEGEND_FALLBACK = true;
 
     private ModuleConfig() {
     }
@@ -68,6 +72,8 @@ public final class ModuleConfig {
         b.putBoolean("enable_gate_bypass", p.getBoolean(KEY_ENABLE_GATE_BYPASS, DEFAULT_ENABLE_GATE_BYPASS));
         b.putBoolean("enable_cookie", p.getBoolean(KEY_ENABLE_COOKIE, DEFAULT_ENABLE_COOKIE));
         b.putBoolean("force_cta", p.getBoolean(KEY_FORCE_CTA, DEFAULT_FORCE_CTA));
+        b.putBoolean("force_legend_fallback",
+                p.getBoolean(KEY_FORCE_LEGEND_FALLBACK, DEFAULT_FORCE_LEGEND_FALLBACK));
         b.putString("cloud_trace", p.getString(KEY_CLOUD_TRACE, ""));
         b.putString("module_version", MODULE_VERSION);
         return b;
