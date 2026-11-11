@@ -15,7 +15,7 @@ import android.os.Bundle;
 public final class ModuleConfig {
 
     /** Human readable module version, also reported by the ContentProvider. */
-    public static final String MODULE_VERSION = "2.5.2";
+    public static final String MODULE_VERSION = "2.5.3";
 
     /** SharedPreferences file used by the module app (private). */
     public static final String PREFS_NAME = "leica_lsposed_config";
@@ -40,6 +40,8 @@ public final class ModuleConfig {
     /** v2.5.1 option B: inject legend version fallback (V2/M3) so no-maker-note
      *  photos can take the cleaned-upload cloud fallback path. Default true. */
     public static final String KEY_FORCE_LEGEND_FALLBACK = "force_legend_fallback";
+    /** v2.5.3: fill missing CreateLegendV2TaskParams (aperture/focus/oaid) at job time. Default true. */
+    public static final String KEY_FORCE_LEGEND_CLOUD_PARAMS = "force_legend_cloud_params";
     /** Newline-joined cloud request trace lines (no token values). */
     public static final String KEY_CLOUD_TRACE = "cloud_trace";
     /** CN | GLOBAL | none (which legend-fallback hook variant matched on device). */
@@ -50,6 +52,7 @@ public final class ModuleConfig {
     public static final boolean DEFAULT_ENABLE_COOKIE = true;
     public static final boolean DEFAULT_FORCE_CTA = false;
     public static final boolean DEFAULT_FORCE_LEGEND_FALLBACK = true;
+    public static final boolean DEFAULT_FORCE_LEGEND_CLOUD_PARAMS = true;
 
     private ModuleConfig() {
     }
@@ -78,6 +81,8 @@ public final class ModuleConfig {
         b.putBoolean("force_cta", p.getBoolean(KEY_FORCE_CTA, DEFAULT_FORCE_CTA));
         b.putBoolean("force_legend_fallback",
                 p.getBoolean(KEY_FORCE_LEGEND_FALLBACK, DEFAULT_FORCE_LEGEND_FALLBACK));
+        b.putBoolean("force_legend_cloud_params",
+                p.getBoolean(KEY_FORCE_LEGEND_CLOUD_PARAMS, DEFAULT_FORCE_LEGEND_CLOUD_PARAMS));
         b.putString("cloud_trace", p.getString(KEY_CLOUD_TRACE, ""));
         b.putString("legend_fallback_target", p.getString(KEY_LEGEND_FALLBACK_TARGET, ""));
         b.putString("module_version", MODULE_VERSION);
