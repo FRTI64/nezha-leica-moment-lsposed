@@ -10,9 +10,9 @@
 
 ## 1. 安装
 
-1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.6.1.apk`
-   （`package=com.nezha.leica.lsposed`，versionCode 19 / versionName 2.6.1，
-   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.6.0）已被本版取代）。
+1. 获取 APK：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.6.2.apk`
+   （`package=com.nezha.leica.lsposed`，versionCode 20 / versionName 2.6.2，
+   minSdk 29 / targetSdk 35，v3 签名；旧版 v1.x / v2.x（≤2.6.1）已被本版取代）。
    本版为 **「无属性伪装」模式**：不修改、不伪装任何系统属性（不做属性读写，也不 hook SystemProperties）。
    v2.4.0 重点：**彻底移除系统账号 Cookie 路径**（不读取/不捕获/不保存系统账号 STS Cookie）；
    Cookie 来源仅限**用户自己**手动粘贴或本模块全屏网页登录；新增**网页会话自检**（evaluateJavascript）。
@@ -48,6 +48,12 @@
    混淆 OkHttp `b11.f0.h()`（ResponseBody.string，记录服务端响应 JSON，`cloud_resp_body=…`）；
    两者都经脱敏、单条 ≤600 字符，仅本地保存最近 8 条，不上传。用于定位
    `HTTP 400 / errorCode 20090002 (INVALID_INPUT_PARAM_ERROR)`。
+   v2.6.2 新增 **logcat 可见诊断（不依赖模块 provider）**：每个捕获点同时写
+   `android.util.Log.i("LeicaMoment", ...)` 与 `XposedBridge.log`；provider 调用失败会打印
+   `Log.w`。新增直接 hook：`AiAvatarV2ResponseEntity` 构造器（`resp_entity code=… msg=… trace=…`）与
+   Retrofit `HttpException`（`l21.j`，`http_error code=… msg=…`），并记录
+   `create_params final: oaid/aperture/focusX/focusY/deviceName/deviceType/androidIdLen`。
+   即使 UI「云端报文捕获/云端轨迹」为空，也能用 logcat 看到真实报文；收集命令见第 7 节「日志排障」。
 2. 在已安装 **LSPosed**（Zygisk/Riru 均可）的设备上，用文件管理器或 `adb install -r` 安装。
 3. 打开 LSPosed 管理器 →「模块」→ 应能看到 **「徕卡一瞬 LSPosed」**
    （legacy Xposed 模块，本模块已带 `xposedmodule=true` / `xposedminversion=82` 元数据）。
@@ -231,7 +237,7 @@ HyperOS 4 引入了大量 Rust 组件：
     **需强制停止相机或重启手机**后生效；④ 功能开关可关闭，诊断显示 `camera_makernote=CN|GLOBAL|none`。
     测试：拍一张正常亮度、未编辑的「徕卡一瞬」照片，再用强制启动/相册编辑触发二次增强，查看是否仍报
     legendInfo/元数据缺失。
-  - **云端报文捕获（v2.6.1，本地诊断）**：③ Cookie 体检卡片中的「云端报文捕获（最近8条）」会显示
+  - **云端报文捕获（v2.6.1+ / v2.6.2 logcat 双写，本地诊断）**：③ Cookie 体检卡片中的「云端报文捕获（最近8条）」会显示
     本次 create 请求的 JSON（`legend_create_body=`）与服务端响应 JSON（`cloud_resp_body=`），
     经脱敏（去掉 cookie/token/signature/authorization 类值）、单条 ≤600 字符、仅本地保存最近 8 条、不上传；
     「复制诊断信息」也会带上这些内容。用于分析 `HTTP 400 / errorCode 20090002`（INVALID_INPUT_PARAM_ERROR）。
@@ -281,6 +287,12 @@ HyperOS 4 引入了大量 Rust 组件：
     （路径仅匹配 aiPhotoCloud / legend / hardwareAuth / hardwareNonce / auth/v1 / billing），
     **绝不记录查询参数、签名、Cookie 值、请求头值或请求体**。使用方式：先打开相册编辑并触发一次
     「二次增强」，再刷新轨迹/复制诊断，即可在真机看到 App 实际请求的云地址与 HTTP 码。
+- **日志排障（v2.6.2）**：若「云端报文捕获/云端轨迹」仍显示暂无，用 adb 抓 logcat：
+  `su -c "logcat -d | grep -E 'LeicaMoment|LSPosed-Bridge' | tail -60"`
+  重点看 `create_params final:` / `legend_create_body=` / `cloud_resp_body=` / `resp_entity code=` /
+  `http_error code=` / `cloud_capture stored … ok=`。若看到 `cloud_capture stored … ok=false` 或
+  `provider call failed`，说明 provider 写入路径被系统拦截，但 logcat 中的报文内容仍然完整可用；
+  建议先把 logcat 全文发回分析。
 - **④ 功能开关**：门禁解锁（直接方法 Hook，不修改任何系统属性）、Cookie 注入（仅用户 Cookie）；
   CTA 开关为不可用状态（本模块有意不强制 CTA）。
 - **⑤ 使用说明与限制**：可折叠，内容与第 2~9 节一致。
@@ -365,7 +377,7 @@ HyperOS 4 引入了大量 Rust 组件：
 | LSPosed 模块列表看不到 | 确认 APK 已安装；重启 LSPosed 管理器；确认 LSPosed 支持 legacy API。 |
 | 入口仍不显示 | 确认作用域勾选 `com.miui.mediaeditor`（建议同时勾选 `com.miui.gallery`）；强制停止相册+媒体编辑器；**清除相册能力缓存**（设置→应用→相册→清除数据/缓存，或 `adb shell pm clear com.miui.gallery`）；看 LSPosed 日志是否有 `predicate hook installed: ...`；必要时重启手机。 |
 | 拍摄的一瞬照片没有 Moment 元数据（媒体编辑器仍报 legendInfo null / 图片解析失败） | v2.6.0 默认启用 CN/Global 相机 MakerNote 标签同步；请确认 ④ 开关 `sync_cn_camera_makernote` 开启、诊断显示 `camera_makernote=GLOBAL`（或 CN），并**强制停止相机/重启**使相机进程重新加载模块；再用相机拍一张正常亮度、未编辑的徕卡一瞬照片测试。 |
-| 云端 create 返回 HTTP 400 / errorCode 20090002 | v2.6.1 会捕获 create 请求 JSON 与服务端响应 JSON：③ 卡片「云端报文捕获（最近8条）」/「复制诊断信息」中查看 `legend_create_body=` 与 `cloud_resp_body=`（已脱敏，仅本地）。把这两段发回分析；常见原因：oaid 伪值不被接受、focus/aperture 取值范围或 imgUrl 参数不匹配。 |
+| 云端 create 返回 HTTP 400 / errorCode 20090002 | v2.6.2 起每个捕获点都会同时写 logcat：`su -c "logcat -d | grep -E 'LeicaMoment|LSPosed-Bridge' | tail -60"`，重点看 `legend_create_body=`（实际发送 JSON）、`cloud_resp_body=`、`resp_entity code=... msg=...`、`http_error code=... msg=...`。UI 的「云端报文捕获（最近8条）」/「复制诊断信息」也显示脱敏后的内容；若 UI 为空而 logcat 有内容，说明 provider 写入被拦（不影响抓报文）。常见原因：oaid 伪值不被接受、focus/aperture 取值范围或 imgUrl 参数不匹配。 |
 | 云端 create 返回 HTTP 400 / errorCode 439 | v2.5.3 已默认补全 CreateLegendV2TaskParams 的 aperture/focusX/focusY/oaid，请确认 ④ 功能开关 `force_legend_cloud_params` 开启，并在「刷新云端轨迹」/复制诊断中查看追加的 `body=` 片段；若仍 400，把该片段发回分析（含 errorCode/errorMsg，无令牌/请求头值）。 |
 | 「图片解析失败」（legendInfo is null） | v2.5.2 起 CN/GLOBAL 均支持 legend 版本回落注入（`legend_fallback_target` 显示命中变体，none 表示未匹配）；若仍失败请确认 ④ 功能开关中 `force_legend_fallback` 为开启，并查看「刷新云端轨迹」中的请求与 HTTP 码。原 v2.5.1 说明：，无一瞬 maker note 的照片会走 cleaned upload 兜底并尝试云端请求；若仍失败请确认 ④ 功能开关中 `force_legend_fallback` 为开启，并查看「刷新云端轨迹」中的请求与 HTTP 码。 |
 | 相册没有「二次增强」入口 | 用「②.5 强制启动二次增强（排障）」：先拍一张正常亮度、未编辑的徕卡一瞬照片，再「选择照片并启动」或「用相册最新照片启动」；进入页面点「开始处理」后回模块刷新云端轨迹。 |
