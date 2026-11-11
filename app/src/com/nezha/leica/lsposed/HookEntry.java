@@ -12,6 +12,7 @@ import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.Date;
+import java.util.UUID;
 import java.util.Locale;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -185,6 +186,13 @@ public class HookEntry implements IXposedHookLoadPackage {
             "2", "9", "2", "1", "4", "4"
     };
 
+    /** v2.5.3: CreateLegendV2TaskParams (real class name, CN and GLOBAL). */
+    private static final String LEGEND_CLOUD_PARAMS_CLASS =
+            "com.miui.mediaeditor.aigc.cloud.internal.legend.api.entity.CreateLegendV2TaskParams";
+    private static volatile String sPseudoOaid = "";
+    private static volatile boolean sLegendCloudParamsLogged;
+    private static volatile boolean sLegendCloudParamsWarned;
+
     private static volatile Constructor<?> sLegendCtor;
     private static volatile Object sLegendV2;
     private static volatile Object sLegendM3;
@@ -236,6 +244,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookAccountProbe(lpparam);
             hookLegendFallback(lpparam);
             hookMakerNoteFallback(lpparam);
+            hookLegendCloudParams(lpparam);
             log("all hook installers finished for " + pkg);
         } catch (Throwable t) {
             log("FATAL hook installation error: " + t);
@@ -491,9 +500,16 @@ public class HookEntry implements IXposedHookLoadPackage {
                                     } catch (Throwable t) {
                                         ts = "?";
                                     }
+                                    String traceBody = "";
+                                    String lowerTracePath = path.toLowerCase(Locale.US);
+                                    if (lowerTracePath.contains("aiphotocloud")
+                                            || lowerTracePath.contains("legend")) {
+                                        traceBody = peekResponseBodySnippet(response, 1024);
+                                    }
                                     recordCloudTrace(ts + " " + httpMethod + " " + host + path
                                             + " -> " + (code > 0 ? String.valueOf(code) : "?")
-                                            + " cookie=" + (cookiePresent ? "1" : "0"));
+                                            + " cookie=" + (cookiePresent ? "1" : "0")
+                                            + (traceBody.isEmpty() ? "" : " body=" + traceBody));
                                 } catch (Throwable t) {
                                     // never disturb the network path
                                 }
@@ -1024,6 +1040,208 @@ public class HookEntry implements IXposedHookLoadPackage {
             }
         }
         return null;
+    }
+
+    // ---------------------------------------------------------------------
+    // (1f) Legend cloud create-params fill (v2.5.3) + response body snippet
+    // ---------------------------------------------------------------------
+
+    /**
+     * Hooks {@code CreateLegendV2TaskParams} constructors (real class name, same on
+     * CN and GLOBAL) and fills null/empty aperture/focusX/focusY/oaid at job time,
+     * so the cloud create request carries valid parameters (device log showed
+     * aperture=null, focusX=null, focusY=null, oaid="" -&gt; HTTP 400 / errorCode 439).
+     * Fail-safe reflection only.
+     */
+    private static void hookLegendCloudParams(XC_LoadPackage.LoadPackageParam lpparam) {
+        Class<?> cls;
+        try {
+            cls = XposedHelpers.findClass(LEGEND_CLOUD_PARAMS_CLASS, lpparam.classLoader);
+        } catch (Throwable t) {
+            log("legend cloud params: class " + LEGEND_CLOUD_PARAMS_CLASS + " not present (skip)");
+            return;
+        }
+        Constructor<?>[] ctors = cls.getDeclaredConstructors();
+        int installed = 0;
+        for (int i = 0; i < ctors.length; i++) {
+            final Constructor<?> c = ctors[i];
+            Class<?>[] ps = c.getParameterTypes();
+            if (ps.length != 9) {
+                continue;
+            }
+            if (ps[6] != Float.class || ps[7] != Integer.class || ps[8] != Integer.class) {
+                continue;
+            }
+            try {
+                c.setAccessible(true);
+                XposedBridge.hookMethod(c, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            if (!legendCloudParamsEnabled()) {
+                                return;
+                            }
+                            fillLegendCloudParams(param.thisObject);
+                        } catch (Throwable t) {
+                            if (!sLegendCloudParamsWarned) {
+                                sLegendCloudParamsWarned = true;
+                                log("legend cloud params fill failed (fail-safe skip): " + t);
+                            }
+                        }
+                    }
+                });
+                installed++;
+            } catch (Throwable t) {
+                log("legend cloud params constructor hook failed: " + t);
+            }
+        }
+        if (installed == 0) {
+            log("WARN: CreateLegendV2TaskParams constructor (9 params) not found");
+        } else {
+            log("legend cloud params hook installed: " + LEGEND_CLOUD_PARAMS_CLASS
+                    + " (" + installed + " ctor)");
+        }
+    }
+
+    private static boolean legendCloudParamsEnabled() {
+        try {
+            return config().getBoolean("force_legend_cloud_params",
+                    ModuleConfig.DEFAULT_FORCE_LEGEND_CLOUD_PARAMS);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private static void fillLegendCloudParams(Object params) {
+        if (params == null) {
+            return;
+        }
+        boolean changed = false;
+        try {
+            Object aperture = XposedHelpers.getObjectField(params, "aperture");
+            if (aperture == null) {
+                XposedHelpers.setObjectField(params, "aperture", Float.valueOf(1.67f));
+                changed = true;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            Object focusX = XposedHelpers.getObjectField(params, "focusX");
+            if (focusX == null) {
+                XposedHelpers.setObjectField(params, "focusX", Integer.valueOf(2048));
+                changed = true;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            Object focusY = XposedHelpers.getObjectField(params, "focusY");
+            if (focusY == null) {
+                XposedHelpers.setObjectField(params, "focusY", Integer.valueOf(1536));
+                changed = true;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            Object oaid = XposedHelpers.getObjectField(params, "oaid");
+            if (oaid == null || String.valueOf(oaid).trim().isEmpty()) {
+                XposedHelpers.setObjectField(params, "oaid", stablePseudoOaid());
+                changed = true;
+            }
+        } catch (Throwable ignored) {
+        }
+        if (changed && !sLegendCloudParamsLogged) {
+            sLegendCloudParamsLogged = true;
+            log("legend cloud params filled: aperture=1.67 focusX=2048 focusY=1536 oaid=pseudo-uuid"
+                    + " (CreateLegendV2TaskParams)");
+        }
+    }
+
+    /** Stable per-process pseudo-OAID (UUID-like; not a real advertising id). */
+    private static String stablePseudoOaid() {
+        String cached = sPseudoOaid;
+        if (cached != null && !cached.isEmpty()) {
+            return cached;
+        }
+        synchronized (HookEntry.class) {
+            if (sPseudoOaid == null || sPseudoOaid.isEmpty()) {
+                String raw = UUID.randomUUID().toString();
+                sPseudoOaid = raw;
+            }
+            return sPseudoOaid;
+        }
+    }
+
+    /**
+     * Non-consuming response-body snippet via reflective okhttp3-style
+     * {@code peekBody(1024)} (falls back to skip when unavailable/broken).
+     */
+    private static String peekResponseBodySnippet(Object response, int maxChars) {
+        if (response == null) {
+            return "";
+        }
+        try {
+            Method peek = null;
+            Method[] methods = response.getClass().getMethods();
+            for (int i = 0; i < methods.length; i++) {
+                Method m = methods[i];
+                if (m.getName().equals("peekBody") && m.getParameterTypes().length == 1) {
+                    Class<?> pt = m.getParameterTypes()[0];
+                    if (pt == long.class || pt == Long.class || pt == int.class || pt == Integer.class) {
+                        peek = m;
+                        break;
+                    }
+                }
+            }
+            if (peek == null) {
+                return "";
+            }
+            Object body = peek.invoke(response, Long.valueOf(maxChars));
+            if (body == null) {
+                return "";
+            }
+            Method stringMethod = null;
+            Method[] bms = body.getClass().getMethods();
+            for (int i = 0; i < bms.length; i++) {
+                Method m = bms[i];
+                if (m.getName().equals("string") && m.getParameterTypes().length == 0) {
+                    stringMethod = m;
+                    break;
+                }
+            }
+            if (stringMethod == null) {
+                return "";
+            }
+            Object s = stringMethod.invoke(body);
+            if (!(s instanceof String)) {
+                return "";
+            }
+            return sanitizeTraceBody((String) s, 200);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** Strips control chars, collapses whitespace, redacts token-looking values, caps length. */
+    private static String sanitizeTraceBody(String raw, int maxChars) {
+        if (raw == null || raw.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '\n' || c == '\r' || c == '\t') {
+                sb.append(' ');
+            } else if (c >= 32 && c != 127) {
+                sb.append(c);
+            }
+        }
+        String out = sb.toString().replaceAll("\\s+", " ").trim();
+        // Redact obvious token-ish JSON values (defensive; keep only redacted marker).
+        out = out.replaceAll("(?i)(\"?(?:cookie|passToken|serviceToken|token|signature|authorization)\"?\\s*[:=]\\s*\")[^\"]*\"", "$1***\"");
+        if (out.length() > maxChars) {
+            out = out.substring(0, maxChars) + "\u2026";
+        }
+        return out;
     }
 
     // ---------------------------------------------------------------------
