@@ -1,9 +1,11 @@
-# LSPosed 模块 v2.7.1：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
+# LSPosed 模块 v2.7.2：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
 
 > 交付物：`out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.1.0.apk`（源：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.1.0.apk`；legacy Xposed 模块，LSPosed 可用）
-> 版本：`versionCode 22 / versionName 2.7.1`，74,340 B，sha256 `0069facbd144d39196b58608c00264810e3938009ab6d34b2b9d6630be682755`（两次构建字节一致）
+> 版本：`versionCode 23 / versionName 2.7.2`，74,340 B，sha256 `b9120480ce695b4fb5ee05b576bb67fb102c1bb9a8514f3cd5a2ffa2ac35e152`（两次构建字节一致）
 > 目标：小米 17 Ultra（`nezha` / `nezha_global`），HyperOS 4 / Android 17；`com.miui.mediaeditor`（相册-编辑）、可选 `com.android.camera`（配 Magisk CameraOnly）、`com.miui.gallery`（占位）
 >
+> **v2.7.2 新增（运行时 SystemProperties 区域/国家 hook）**：v2.7.1 只翻转了云配置 isGlobal 本地标志，`cloudConfigProductUrl:` 仍为 intl。v2.7.2 在 mediaeditor 进程 hook `android.os.SystemProperties.get(String[,String])`：记录所有 region/country/locale 属性读取（`region prop: name=value`），并把区域类属性在**进程内**改写为 CN（`ro.miui.build.region`→cn、`ro.miui.region` 等→CN），以促使云配置按 CN 区域返回基址；**不改系统属性、不落盘**。仍受 `simulate_cn_region` 开关控制（默认开）；建议先 `pm clear com.miui.mediaeditor` 强制重取云配置后再测。
+
 > **v2.7.1 新增（模拟 CN 区域获取真实 CN 云基址）**：v2.7.0 硬编码 `api.open.ai.xiaomi.com` 的 legendV2 路径 404，说明 CN AI 照片云基址由 **CN 区域云配置**下发。核查 smali：GLOBAL 云配置工具 `jq.d.a` 读取 `r21.c.b`（isGlobal），CN 对应 `nm.c.a` 读取 `gz0.b.b`。v2.7.1 在 mediaeditor 进程把该静态布尔置为 `false`（并在 `jq.d.a`/`nm.c.a` beforeHook 中反复置位），使云配置按 CN 区域下发真正的 CN 基址；开关 `simulate_cn_region`（默认开），诊断新增 `cn_region=simulated|off|none`；`force_cn_cloud_endpoint` 改为默认关（硬编码 URL 404 的 A/B 对照保留）。可用 logcat 的 `cloudConfigProductUrl:` 验证是否变成 CN 域名。
 
 ### 最终结论（真机实测，v2.7.0）
@@ -161,9 +163,10 @@
 
 ## 5. 验证状态（静态）
 
-- 可复现构建：两次构建 sha256 一致（`0069facb…2755`，74,340 B，vc=22/vn=2.7.1）。
+- 可复现构建：两次构建 sha256 一致（`b9120480…e152`，74,340 B，vc=23/vn=2.7.2）。
 - 签名：apksigner `Verifies`，v1+v2+v3（`--min-sdk-version 21` 校验）。
-- APK：`classes.dex`（139,296 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=22/vn=2.7.1、minSdk 29/targetSdk 35、INTERNET + READ_MEDIA_IMAGES(+旧版存储 maxSdk32)；Manifest 含 `LoginActivity`(exported=false)、`<queries>` mediaeditor；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- APK：`classes.dex`（143,064 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=23/vn=2.7.2、minSdk 29/targetSdk 35、INTERNET + READ_MEDIA_IMAGES(+旧版存储 maxSdk32)；Manifest 含 `LoginActivity`(exported=false)、`<queries>` mediaeditor；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- v2.7.2 新增字符串：`sysprop region hook`、`region prop`、`region prop rewritten`、`ro.miui.build.region`。
 - v2.7.1 新增字符串：`simulate_cn_region`、`cn region simulated`、`cn_region`、`r21.c`、`gz0.b`。
 - v2.7.0 新增字符串：`force_cn_cloud_endpoint`、`cloud endpoint rewritten`、`cloud_endpoint`、`jq.d`、`nm.c`、`api.open.ai.xiaomi.com`。
 - v2.6.2 新增字符串：`LeicaMoment`、`create_params final`、`legend_create_body`、`cloud_resp_body`、`resp_entity`、`http_error`、`AiAvatarV2ResponseEntity`。
@@ -184,7 +187,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.7.1.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（74,340 B，sha256 `0069facb…2755`） |
+| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.7.2.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（74,340 B，sha256 `b9120480…e152`） |
 | `work/leica/lsposed/app/` | 模块源码（Java + manifest + xposed 元数据） |
 | `work/leica/lsposed/app/README_APP.md` | 用户指南（中文，含两条使用路径/排错） |
 | `work/leica/lsposed/build.sh` / `README_BUILD.md` | 无 Gradle 可复现构建 |
