@@ -169,8 +169,10 @@ public class MainActivity extends Activity {
     private CheckBox cbLegendFallback;
     private CheckBox cbLegendCloudParams;
     private CheckBox cbCameraMakerNote;
+    private CheckBox cbForceCnEndpoint;
     private TextView legendTargetView;
     private TextView cameraMakerNoteTargetView;
+    private TextView cloudEndpointView;
     private TextView helpView;
     private Button helpToggle;
 
@@ -788,6 +790,14 @@ public class MainActivity extends Activity {
         cbCameraMakerNote.setContentDescription("\u540c\u6b65 CN \u76f8\u673a MakerNote \u6807\u7b7e\u5f00\u5173");
         body.addView(cbCameraMakerNote);
 
+        cbForceCnEndpoint = new CheckBox(this);
+        cbForceCnEndpoint.setText("\u5f3a\u5236\u4f7f\u7528 CN \u4e91\u7aef\u70b9 (api.open.ai.xiaomi.com)\uff08A/B\uff1a"
+                + "\u5f00\u542f\u65f6\u5c06 intl \u4e91\u5730\u5740\u91cd\u5199\u4e3a CN\uff1b\u5173\u95ed\u5219\u4f7f\u7528\u56fd\u9645\u7aef\u70b9\uff09");
+        cbForceCnEndpoint.setTextSize(13);
+        cbForceCnEndpoint.setTextColor(colorText);
+        cbForceCnEndpoint.setContentDescription("\u5f3a\u5236\u4f7f\u7528 CN \u4e91\u7aef\u70b9\u5f00\u5173");
+        body.addView(cbForceCnEndpoint);
+
         CheckBox cbCta = new CheckBox(this);
         cbCta.setText("\u5f3a\u5236 CTA \u5df2\u540c\u610f\uff08\u672c\u7248\u672c\u4e0d\u63d0\u4f9b\uff1bCTA \u4e3a\u6b63\u5e38\u9690\u79c1\u5f39\u7a97\uff09");
         cbCta.setTextSize(13);
@@ -814,6 +824,12 @@ public class MainActivity extends Activity {
         cameraMakerNoteTargetView.setTextIsSelectable(true);
         cameraMakerNoteTargetView.setPadding(0, dp(4), 0, 0);
         body.addView(cameraMakerNoteTargetView);
+
+        cloudEndpointView = text("cloud_endpoint=\uff08\u7b49\u5f85\u5a92\u4f53\u7f16\u8f91\u5668\u4e0a\u62a5\uff09",
+                11, colorTextDim, false);
+        cloudEndpointView.setTextIsSelectable(true);
+        cloudEndpointView.setPadding(0, dp(4), 0, 0);
+        body.addView(cloudEndpointView);
     }
 
     private void buildHelpCard() {
@@ -1005,6 +1021,8 @@ public class MainActivity extends Activity {
                             cbLegendCloudParams != null && cbLegendCloudParams.isChecked())
                     .putBoolean(ModuleConfig.KEY_SYNC_CN_CAMERA_MAKERNOTE,
                             cbCameraMakerNote != null && cbCameraMakerNote.isChecked())
+                    .putBoolean(ModuleConfig.KEY_FORCE_CN_CLOUD_ENDPOINT,
+                            cbForceCnEndpoint != null && cbForceCnEndpoint.isChecked())
                     .commit();
         } catch (Throwable t) {
             setActionStatus("\u4fdd\u5b58\u5931\u8d25\uff1a" + t);
@@ -1746,6 +1764,17 @@ public class MainActivity extends Activity {
                 }
             });
         }
+        if (cbForceCnEndpoint != null) {
+            cbForceCnEndpoint.setChecked(p.getBoolean(ModuleConfig.KEY_FORCE_CN_CLOUD_ENDPOINT,
+                    ModuleConfig.DEFAULT_FORCE_CN_CLOUD_ENDPOINT));
+            cbForceCnEndpoint.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    updateOverview();
+                    updateStatusPill();
+                }
+            });
+        }
         if (cbCameraMakerNote != null) {
             cbCameraMakerNote.setChecked(p.getBoolean(ModuleConfig.KEY_SYNC_CN_CAMERA_MAKERNOTE,
                     ModuleConfig.DEFAULT_SYNC_CN_CAMERA_MAKERNOTE));
@@ -1798,6 +1827,17 @@ public class MainActivity extends Activity {
             cameraMakerNoteTargetView.setText("camera_makernote="
                     + (target == null || target.isEmpty() ? "\uff08\u5c1a\u672a\u4e0a\u62a5\uff09" : target)
                     + "\uff08\u76f8\u673a\u8fdb\u7a0b\u4e0a\u62a5\uff1aCN/GLOBAL/none\uff09");
+        }
+        if (cloudEndpointView != null) {
+            String target = "";
+            try {
+                target = ModuleConfig.prefs(this)
+                        .getString(ModuleConfig.KEY_CLOUD_ENDPOINT, "");
+            } catch (Throwable ignored) {
+            }
+            cloudEndpointView.setText("cloud_endpoint="
+                    + (target == null || target.isEmpty() ? "\uff08\u5c1a\u672a\u4e0a\u62a5\uff09" : target)
+                    + "\uff08\u5a92\u4f53\u7f16\u8f91\u5668\u8fdb\u7a0b\u4e0a\u62a5\uff1b\u91cd\u5199\u540e\u4e3a CN \u5730\u5740\uff09");
         }
         if (probing) {
             probeRow.setText("\u68c0\u6d4b\u4e2d\u2026");
@@ -2139,6 +2179,16 @@ public class MainActivity extends Activity {
         sb.append("camera_makernote=")
                 .append(cameraMakernote == null || cameraMakernote.isEmpty()
                         ? "unknown" : cameraMakernote)
+                .append('\n');
+        String cloudEndpoint = "";
+        try {
+            cloudEndpoint = ModuleConfig.prefs(this)
+                    .getString(ModuleConfig.KEY_CLOUD_ENDPOINT, "");
+        } catch (Throwable ignored) {
+        }
+        sb.append("cloud_endpoint=")
+                .append(cloudEndpoint == null || cloudEndpoint.isEmpty()
+                        ? "unknown" : cloudEndpoint)
                 .append('\n');
         String cloudTrace = readCloudTraceString();
         sb.append("Cloud request trace (last 12; method/host/path/code/cookie only, no query/token/body):\n");
