@@ -1,10 +1,15 @@
-# LSPosed 模块 v2.6.0：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
+# LSPosed 模块 v2.6.1：**不伪装任何系统属性**的小米账号 Cookie（含体检/STS 助手）+ 徕卡一瞬/二次增强解锁
 
 > 交付物：`out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.1.0.apk`（源：`work/leica/lsposed/dist/LeicaMoment_LSPosed_v2.1.0.apk`；legacy Xposed 模块，LSPosed 可用）
-> 版本：`versionCode 18 / versionName 2.6.0`，66,148 B，sha256 `d0229c6cade617b4cc2639f8202c5d209c32c2e2959c6aedba0e4da3e9c5195b`（两次构建字节一致）
+> 版本：`versionCode 19 / versionName 2.6.1`，66,148 B，sha256 `44e441e16c5f6b5c58e5d33d11fa4af0d02d9a8961ce747c847abaeb3fd92945`（两次构建字节一致）
 > 目标：小米 17 Ultra（`nezha` / `nezha_global`），HyperOS 4 / Android 17；`com.miui.mediaeditor`（相册-编辑）、可选 `com.android.camera`（配 Magisk CameraOnly）、`com.miui.gallery`（占位）
 >
 > ✅ **本版本完全不伪装系统属性**：不做 `resetprop`、不 hook `android.os.SystemProperties`、不修改任何 `ro.*` 值。改为**直接 hook App 内部的门禁判定方法**返回 `true`（只影响被 hook 的两个进程）。仍为静态分析产物，**未真机运行验证**。
+
+> **v2.6.1 新增（云端报文捕获）**：真机 create 仍返回 HTTP 400 / `errorCode 20090002`（mediaeditor 内映射为 `INVALID_INPUT_PARAM_ERROR`，消息为空）。v2.6.1 在 mediaeditor 进程新增两组捕获：
+> ① hook `CreateLegendV2TaskParamsJsonAdapter.toJson*`，把实际序列化的 create 请求 JSON 记录为 `legend_create_body=`；
+> ② hook 混淆 OkHttp ResponseBody（`b11.f0`）的 `String` getter（`h()`），把服务端响应 JSON 记录为 `cloud_resp_body=`（≤4000 且像 JSON 错误体时，脱敏/截断 600 字符）。
+> 两者经 Provider `append_cloud_capture` 本地保存最近 8 条，模块 ③ 卡片新增「云端报文捕获（最近8条）」+「刷新云端报文」，并并入「复制诊断信息」。用于确定 20090002 到底是哪个参数不合法。
 
 > **v2.6.0 新增（hook 侧同步 CN/Global 相机 MakerNote 差异）**：
 > 真机确认 Global 相机 6.6 的 Xiaomi MakerNote 标签表（`Ig.g`）只注册了 5 个 HdrDisplay 标签；CN 相机 6.7（`Bf.g`）还注册了 5 个 Moment 标签（`MomentVersion 0x30 / MomentType 0x31 / MomentSubMode 0x32 / MomentPro 0x33 / MomentBokehDepthVersion 0x34`，type=4）。Global 相机在保存时会重写 MakerNote，不认识的标签会被丢弃 → 拍出的照片没有 Moment 元数据。
@@ -136,9 +141,10 @@
 
 ## 5. 验证状态（静态）
 
-- 可复现构建：两次构建 sha256 一致（`d0229c6c…195b`，66,148 B，vc=18/vn=2.6.0）。
+- 可复现构建：两次构建 sha256 一致（`44e441e1…2945`，66,148 B，vc=19/vn=2.6.1）。
 - 签名：apksigner `Verifies`，v1+v2+v3（`--min-sdk-version 21` 校验）。
-- APK：`classes.dex`（120,504 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=18/vn=2.6.0、minSdk 29/targetSdk 35、INTERNET + READ_MEDIA_IMAGES(+旧版存储 maxSdk32)；Manifest 含 `LoginActivity`(exported=false)、`<queries>` mediaeditor；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- APK：`classes.dex`（126,508 B）、`assets/xposed_init` → `HookEntry`、`META-INF/xposed/{module.prop,scope.list(含 com.android.camera)}`；`aapt2 dump badging` vc=19/vn=2.6.1、minSdk 29/targetSdk 35、INTERNET + READ_MEDIA_IMAGES(+旧版存储 maxSdk32)；Manifest 含 `LoginActivity`(exported=false)、`<queries>` mediaeditor；dex 内 **0** 个 `de.robv` 类定义（仅类型引用，LSPosed 要求）。
+- v2.6.1 新增字符串：`append_cloud_capture`、`legend_create_body`、`cloud_resp_body`、`CreateLegendV2TaskParamsJsonAdapter`、`b11.f0`、`云端报文捕获`。
 - v2.6.0 新增字符串：`sync_cn_camera_makernote`、`MomentBokehDepthVersion`、`camera_makernote`、`camera makernote map extended`、`Ig.g`、`Bf.g`。
 - v2.5.3 新增字符串：`force_legend_cloud_params`、`CreateLegendV2TaskParams`、`legend cloud params filled`、`peekBody`。
 - v2.5.2 新增 GLOBAL 映射与保险网字符串：`hz.q0`、`hz.k0`、`hz.p0`、`mg.g`、`pc.g`、`MomentSubMode`、`legend fallback hook installed`、`legend_fallback_target`。
@@ -155,7 +161,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.6.0.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（66,148 B，sha256 `d0229c6c…195b`） |
+| `out/leica_moment_port/lsposed/LeicaMoment_LSPosed_v2.6.1.apk`（源：`work/leica/lsposed/dist/`） | 最终 LSPosed APK（66,148 B，sha256 `44e441e1…2945`） |
 | `work/leica/lsposed/app/` | 模块源码（Java + manifest + xposed 元数据） |
 | `work/leica/lsposed/app/README_APP.md` | 用户指南（中文，含两条使用路径/排错） |
 | `work/leica/lsposed/build.sh` / `README_BUILD.md` | 无 Gradle 可复现构建 |
