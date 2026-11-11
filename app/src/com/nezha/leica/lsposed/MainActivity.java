@@ -166,6 +166,7 @@ public class MainActivity extends Activity {
     private CheckBox cbGate;
     private CheckBox cbCookie;
     private CheckBox cbLegendFallback;
+    private TextView legendTargetView;
     private TextView helpView;
     private Button helpToggle;
 
@@ -743,6 +744,12 @@ public class MainActivity extends Activity {
                 12, colorTextDim, false);
         note.setPadding(0, dp(8), 0, 0);
         body.addView(note);
+
+        legendTargetView = text("legend_fallback_target=\uff08\u7b49\u5f85\u6302\u94a9\u8fdb\u7a0b\u4e0a\u62a5\uff09",
+                11, colorTextDim, false);
+        legendTargetView.setTextIsSelectable(true);
+        legendTargetView.setPadding(0, dp(6), 0, 0);
+        body.addView(legendTargetView);
     }
 
     private void buildHelpCard() {
@@ -1680,6 +1687,17 @@ public class MainActivity extends Activity {
             stsRow.setText(hasSts ? "\u542b serviceToken" : "\u7f3a\u5c11 serviceToken\uff08Web Cookie\uff09");
             stsRow.setTextColor(hasSts ? colorGreen : colorYellow);
         }
+        if (legendTargetView != null) {
+            String target = "";
+            try {
+                target = ModuleConfig.prefs(this)
+                        .getString(ModuleConfig.KEY_LEGEND_FALLBACK_TARGET, "");
+            } catch (Throwable ignored) {
+            }
+            legendTargetView.setText("legend_fallback_target="
+                    + (target == null || target.isEmpty() ? "\uff08\u5c1a\u672a\u4e0a\u62a5\uff09" : target)
+                    + "\uff08\u5a92\u4f53\u7f16\u8f91\u5668\u8fdb\u7a0b\u4e0a\u62a5\uff1aCN/GLOBAL/none\uff09");
+        }
         if (probing) {
             probeRow.setText("\u68c0\u6d4b\u4e2d\u2026");
             probeRow.setTextColor(colorAccent);
@@ -1979,6 +1997,15 @@ public class MainActivity extends Activity {
                 sb.append(" [").append(levelLabel(r.level)).append("]\n");
             }
         }
+        String legendTarget = "";
+        try {
+            legendTarget = ModuleConfig.prefs(this)
+                    .getString(ModuleConfig.KEY_LEGEND_FALLBACK_TARGET, "");
+        } catch (Throwable ignored) {
+        }
+        sb.append("legend_fallback_target=")
+                .append(legendTarget == null || legendTarget.isEmpty() ? "unknown" : legendTarget)
+                .append('\n');
         String cloudTrace = readCloudTraceString();
         sb.append("Cloud request trace (last 12; method/host/path/code/cookie only, no query/token/body):\n");
         if (cloudTrace.isEmpty()) {
